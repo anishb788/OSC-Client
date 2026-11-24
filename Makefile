@@ -19,7 +19,8 @@ TARGET		:=	OpenShop
 BUILD		:=	build
 # Every directory under src/, found at make time, so a new source folder can't be silently left out of the Wii build.
 # Objects land flattened in build/ by file name, so two .cpp files must never share a basename.
-SOURCES		:=	$(shell find src -type d)
+# (The inner make pass runs inside build/, where src/ does not exist and SOURCES is unused: hence 2>/dev/null.)
+SOURCES		:=	$(shell find src -type d 2>/dev/null)
 DATA		:=
 INCLUDES	:=	src
 

@@ -63,6 +63,18 @@ $(LAYOUTTEST): tests/layout_test.cpp src/ui/HomeLayout.h
 	@mkdir -p $(dir $@)
 	$(CXX) $(TESTCXX) -o $@ tests/layout_test.cpp
 
+HTTPPARSETEST := $(BUILD)/tests/http_parse_test
+
+$(HTTPPARSETEST): tests/http_parse_test.cpp src/net/HttpParse.cpp src/net/HttpParse.h src/net/Http.h src/net/Sinks.cpp src/core/Version.h
+	@mkdir -p $(dir $@)
+	$(CXX) $(TESTCXX) -o $@ tests/http_parse_test.cpp src/net/HttpParse.cpp src/net/Sinks.cpp
+
+HTTPTRANSFERTEST := $(BUILD)/tests/http_transfer_test
+
+$(HTTPTRANSFERTEST): tests/http_transfer_test.cpp tests/FakeTransport.h src/net/HttpTransfer.cpp src/net/HttpTransfer.h src/net/Transport.h src/net/HttpParse.cpp src/net/HttpParse.h src/net/Http.h src/net/Sinks.cpp src/core/Log.h src/core/Version.h
+	@mkdir -p $(dir $@)
+	$(CXX) $(TESTCXX) -Itests -o $@ tests/http_transfer_test.cpp src/net/HttpTransfer.cpp src/net/HttpParse.cpp src/net/Sinks.cpp
+
 # The one test that needs SDL: draws the button helpers into a software renderer (no window, no display).
 GFXTEST := $(BUILD)/tests/gfx_test
 
@@ -70,11 +82,13 @@ $(GFXTEST): tests/gfx_test.cpp src/gfx/Gfx.cpp src/gfx/Gfx.h src/gfx/Theme.h src
 	@mkdir -p $(dir $@)
 	$(CXX) $(TESTCXX) $(shell pkg-config --cflags sdl2) -o $@ tests/gfx_test.cpp src/gfx/Gfx.cpp $(shell pkg-config --libs sdl2) -lm
 
-test: $(TESTBIN) $(CORETEST) $(TOPBARTEST) $(LAYOUTTEST) $(GFXTEST)
+test: $(TESTBIN) $(CORETEST) $(TOPBARTEST) $(LAYOUTTEST) $(HTTPPARSETEST) $(HTTPTRANSFERTEST) $(GFXTEST)
 	$(TESTBIN)
 	$(CORETEST)
 	$(TOPBARTEST)
 	$(LAYOUTTEST)
+	$(HTTPPARSETEST)
+	$(HTTPTRANSFERTEST)
 	$(GFXTEST)
 
 clean:

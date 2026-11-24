@@ -2,6 +2,8 @@
 
 #include <SDL.h>
 
+#include <cstdio>
+
 #include "core/Log.h"
 
 #ifdef __wii__
@@ -44,6 +46,29 @@ void finishFrame(Input& in, uint32_t held, float dt, uint32_t downEvents = 0) {
 } // namespace
 
 const std::string& dataDir() { return gDataDir; }
+
+bool writeFile(const std::string& path, const std::string& data) {
+	FILE* f = std::fopen(path.c_str(), "wb");
+	if (!f) {
+		LOG("writeFile: cannot open %s", path.c_str());
+		return false;
+	}
+	bool ok = data.empty() || std::fwrite(data.data(), 1, data.size(), f) == data.size();
+	if (std::fclose(f) != 0) ok = false;
+	if (!ok) LOG("writeFile: write failed for %s", path.c_str());
+	return ok;
+}
+
+bool readFile(const std::string& path, std::string& out) {
+	out.clear();
+	FILE* f = std::fopen(path.c_str(), "rb");
+	if (!f) return false;
+	char buf[1024];
+	size_t n;
+	while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) out.append(buf, n);
+	std::fclose(f);
+	return true;
+}
 
 #ifdef __wii__
 

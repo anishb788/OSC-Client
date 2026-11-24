@@ -3,6 +3,7 @@
 
 #include "App.h"
 #include "audio/Audio.h"
+#include "core/Log.h"
 #include "gfx/Theme.h"
 #include "ui/Widgets.h"
 
@@ -126,7 +127,11 @@ private:
 	}
 
 	void update(App& app) {
+		Uint64 t0 = SDL_GetPerformanceCounter();
 		results = app.catalog.search(query);
+		double ms = (double)(SDL_GetPerformanceCounter() - t0) * 1000.0 / (double)SDL_GetPerformanceFrequency();
+		if (!query.empty()) LOG("search \"%s\": %d results in %.3f ms (%d apps)", query.c_str(), (int)results.size(), ms,
+		                      (int)app.catalog.apps.size());
 		dirty = false;
 	}
 

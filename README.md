@@ -38,14 +38,24 @@ the real catalog. Downloading and installing apps isn't implemented yet.
 ./dev watch              # Wii build in Dolphin, rebuilt and relaunched on every save
 ./dev watch-pc           # native Linux build, the fastest way to iterate on UI
 ./dev run --screen detail   # start on a screen: home, search, list, detail, dialog
+./dev pc --mock --offline --refresh   # dev options (parsed now, acted on in later milestone 2 steps)
 ./dev package            # dist/OpenShop.zip for the Homebrew Channel
 ```
 
 - **Toolchain:** the official `devkitpro/devkitppc` container via podman. A native devkitPro
   install is used instead when `$DEVKITPPC` is set.
-- **PC build:** needs `sudo apt install libsdl2-dev libsdl2-ttf-dev libsdl2-mixer-dev`.
+- **PC build:** needs `sudo apt install libsdl2-dev libsdl2-ttf-dev libsdl2-mixer-dev libjansson-dev libsdl2-image-dev`.
 - **Dolphin SD card:** Dolphin's virtual SD card is synced with `./sdcard`, which is
   git-ignored. The app reads `sdcard/apps/OpenShop/` both in Dolphin and in the PC build.
+  Dolphin only writes the virtual SD back to `./sdcard` when emulation shuts down cleanly,
+  so `./dev` stops it with one SIGINT and waits (up to `DOLPHIN_STOP_TIMEOUT`, default 10 s)
+  instead of killing it; a forced kill prints a warning that the session's SD writes are lost.
+  The real folder is `.dolphin/sdcard` and `./sdcard` is a symlink to it (`./dev` sets this up
+  and moves an old real `./sdcard` over). The Flatpak gets write access to `.dolphin/` only,
+  because the sync renames the sync folder, which needs a writable parent. The app records each start in `sdcard/apps/OpenShop/lastrun.txt` (run count).
+- **Checks:** `./dev build WERROR=1` / `make -f Makefile.pc WERROR=1` turn warnings into errors.
+  `make -f Makefile.pc SAN=1 test` builds the tests (and plain `SAN=1` the app, in `build-pc-san/`)
+  with AddressSanitizer and UBSan.
 - **Logging:** `LOG(...)` from `src/core/Log.h` prints to the terminal running `./dev`.
 - **Editor setup:** run `./dev headers` once for VS Code IntelliSense.
 

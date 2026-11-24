@@ -1,12 +1,30 @@
 #include "App.h"
 
-#include <fstream>
+#include <cstdio>
+#include <ctime>
+
+#include <SDL_image.h>
+#include <jansson.h>
 
 #include "audio/Audio.h"
 #include "core/Log.h"
+#include "core/Version.h"
 #include "gfx/Theme.h"
 #include "platform/Platform.h"
 #include "ui/Widgets.h"
+
+// Startup probe: <dataDir>/lastrun.txt holds the run count and a timestamp. It proves SD writes
+// from inside the app persist (including through Dolphin's synced virtual SD). Never fatal.
+static void writeLastRunProbe() {
+	const std::string path = platform::dataDir() + "/lastrun.txt";
+	std::string old;
+	int count = 0;
+	if (platform::readFile(path, old)) std::sscanf(old.c_str(), "%d", &count);
+	count++;
+	char buf[96];
+	std::snprintf(buf, sizeof buf, "%d\n%lld\n", count, (long long)std::time(nullptr));
+	if (platform::writeFile(path, buf)) LOG("lastrun probe: run #%d written to %s", count, path.c_str());
+}
 
 bool App::init(int argc, char** argv) {
 	if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_TIMER) != 0) {
@@ -17,6 +35,14 @@ bool App::init(int argc, char** argv) {
 	if (!gfx.init(platform::widescreen(), 2)) return false;
 	if (!text.init(gfx.renderer(), gfx.scaleX())) return false;
 	audio::init(platform::dataDir());
+	writeLastRunProbe();
+
+	opts = DevOptions::load(platform::dataDir());
+	LOG("OpenShop %s, User-Agent: %s", OPENSHOP_VERSION, userAgent());
+	LOG("Dev options: %s", opts.describe().c_str());
+	LOG("jansson %s", JANSSON_VERSION);
+	if (IMG_Init(IMG_INIT_PNG) & IMG_INIT_PNG) LOG("SDL2_image: PNG support initialised");
+	else LOG("SDL2_image: IMG_Init(PNG) failed: %s", IMG_GetError());
 
 	loadMockCatalog(catalog);
 	LOG("Catalog: %d apps (mock data)", (int)catalog.apps.size());
@@ -26,13 +52,10 @@ bool App::init(int argc, char** argv) {
 	return true;
 }
 
-// Development shortcut: `./dev run --screen detail` writes <dataDir>/devstart so the
-// app opens straight on the screen being worked on.
+// Development shortcut: `./dev run --screen detail` writes <dataDir>/devstart (see DevOptions)
+// so the app opens straight on the screen being worked on.
 void App::openDevStartScreen() {
-	std::string which;
-	if (const char* env = SDL_getenv("OPENSHOP_START")) which = env;
-	std::ifstream f(platform::dataDir() + "/devstart");
-	if (which.empty() && f) std::getline(f, which);
+	const std::string& which = opts.screen;
 	if (which.empty() || which == "home") return;
 	LOG("Dev start screen: %s", which.c_str());
 
@@ -46,6 +69,7 @@ void App::openDevStartScreen() {
 
 void App::shutdown() {
 	stack.clear();
+	IMG_Quit();
 	audio::shutdown();
 	text.shutdown();
 	gfx.shutdown();

@@ -1,11 +1,25 @@
 # Native Linux build of OpenShop for fast UI iteration (mouse = Wii Remote pointer).
-# Requires: libsdl2-dev libsdl2-ttf-dev libsdl2-mixer-dev
+# Requires: libsdl2-dev libsdl2-ttf-dev libsdl2-mixer-dev libjansson-dev libsdl2-image-dev
 CXX      ?= g++
 BUILD    := build-pc
 TARGET   := $(BUILD)/openshop
-PKGS     := sdl2 SDL2_ttf SDL2_mixer
+PKGS     := sdl2 SDL2_ttf SDL2_mixer SDL2_image jansson
 
-CXXFLAGS := -std=gnu++20 -g -O1 -Wall -Wextra -Isrc -MMD -MP $(shell pkg-config --cflags $(PKGS))
+# WERROR=1 turns any warning into an error (the zero-warning rule).
+# SAN=1 builds the app and the tests with AddressSanitizer + UBSan into build-pc-san/, so
+# sanitizer and normal objects never mix. Example: make -f Makefile.pc SAN=1 test
+WARN     := -Wall -Wextra
+ifeq ($(WERROR),1)
+WARN     += -Werror
+endif
+SANFLAGS :=
+ifeq ($(SAN),1)
+BUILD    := build-pc-san
+TARGET   := $(BUILD)/openshop
+SANFLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined -fno-var-tracking-assignments
+endif
+
+CXXFLAGS := -std=gnu++20 -g -O1 $(WARN) $(SANFLAGS) -Isrc -MMD -MP $(shell pkg-config --cflags $(PKGS))
 ASFLAGS  := -Wa,-I.
 LDLIBS   := $(shell pkg-config --libs $(PKGS)) -lm
 
@@ -13,7 +27,7 @@ SRCS := $(shell find src -name '*.cpp')
 OBJS := $(SRCS:%.cpp=$(BUILD)/%.o) $(BUILD)/src/assets.o
 
 $(TARGET): $(OBJS)
-	$(CXX) -o $@ $^ $(LDLIBS)
+	$(CXX) $(SANFLAGS) -o $@ $^ $(LDLIBS)
 
 $(BUILD)/%.o: %.cpp
 	@mkdir -p $(dir $@)
@@ -23,8 +37,19 @@ $(BUILD)/src/assets.o: src/assets.S $(wildcard assets/fonts/*.ttf)
 	@mkdir -p $(dir $@)
 	$(CXX) $(ASFLAGS) -c $< -o $@
 
+# Host-side tests for pure logic (no SDL). Not part of the app or the Wii build.
+TESTBIN := $(BUILD)/tests/catalog_test
+TESTCXX := -std=gnu++20 -g -O1 $(WARN) $(SANFLAGS) -Isrc
+
+$(TESTBIN): tests/catalog_test.cpp src/catalog/Catalog.cpp src/catalog/MockCatalog.cpp src/catalog/Catalog.h
+	@mkdir -p $(dir $@)
+	$(CXX) $(TESTCXX) -o $@ tests/catalog_test.cpp src/catalog/Catalog.cpp src/catalog/MockCatalog.cpp
+
+test: $(TESTBIN)
+	$(TESTBIN)
+
 clean:
 	rm -rf $(BUILD)
 
 -include $(OBJS:.o=.d)
-.PHONY: clean
+.PHONY: clean test

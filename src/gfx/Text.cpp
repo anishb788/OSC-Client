@@ -165,6 +165,12 @@ std::string Text::ellipsize(Font f, int size, std::string_view s, int maxW) {
 
 std::vector<std::string> Text::wrap(Font f, int size, std::string_view s, int maxW, int maxLines) {
 	std::vector<std::string> lines;
+	// Defensive: '\r' has no glyph (renders as a box), so drop it. Catalog text is already sanitized.
+	std::string noCr;
+	if (s.find('\r') != std::string_view::npos) {
+		for (char c : s) if (c != '\r') noCr += c;
+		s = noCr;
+	}
 	auto push = [&](std::string line) {
 		lines.push_back(std::move(line));
 		return maxLines > 0 && (int)lines.size() >= maxLines;

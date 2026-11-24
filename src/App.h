@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "catalog/Catalog.h"
+#include "core/DevOptions.h"
 #include "gfx/Gfx.h"
 #include "gfx/Text.h"
 #include "ui/Ui.h"
@@ -37,6 +38,7 @@ public:
 	Text text;
 	Ui ui{gfx, text};
 	Catalog catalog;
+	DevOptions opts; // parsed once in init()
 
 	bool init(int argc, char** argv);
 	void run();

@@ -19,9 +19,9 @@ class ListScreen : public Screen {
 public:
 	ListScreen(std::string title, std::vector<const AppEntry*> apps, std::vector<SortMode> sorts, SortMode initial,
 	           std::string empty)
-		: title(std::move(title)), apps(std::move(apps)), sorts(std::move(sorts)), sort(initial),
+		: title(std::move(title)), base(std::move(apps)), sorts(std::move(sorts)), sort(initial),
 		  emptyMessage(std::move(empty)) {
-		Catalog::sort(this->apps, sort);
+		resort();
 	}
 
 	void draw(App& app, Ui& ui) override {
@@ -43,7 +43,7 @@ public:
 			               sorts[i] == sort ? Pill::Selected : Pill::Normal, nullptr, 15) &&
 			    sorts[i] != sort) {
 				sort = sorts[i];
-				Catalog::sort(apps, sort);
+				resort();
 				page = 0;
 				slide = 0.0f;
 			}
@@ -99,6 +99,12 @@ public:
 private:
 	static constexpr int kPerPage = 5;
 
+	// Always sort a copy of the original (relevance) order, so SortMode::Relevance can return to it.
+	void resort() {
+		apps = base;
+		Catalog::sort(apps, sort);
+	}
+
 	void drawRow(Ui& ui, Rect r, float hov, const AppEntry& a) {
 		drawCard(ui, r, hov, 12);
 		Rect g = r.inset(-2.5f * hov);
@@ -137,7 +143,8 @@ private:
 	}
 
 	std::string title;
-	std::vector<const AppEntry*> apps;
+	std::vector<const AppEntry*> base; // order as given by the caller
+	std::vector<const AppEntry*> apps; // `base` sorted by `sort`
 	std::vector<SortMode> sorts;
 	SortMode sort;
 	std::string emptyMessage;

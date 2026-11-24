@@ -17,7 +17,7 @@ include $(DEVKITPPC)/wii_rules
 #---------------------------------------------------------------------------------
 TARGET		:=	OpenShop
 BUILD		:=	build
-SOURCES		:=	src src/core src/gfx src/ui src/screens src/catalog src/platform src/audio
+SOURCES		:=	src src/core src/gfx src/ui src/screens src/catalog src/platform src/audio src/net
 DATA		:=
 INCLUDES	:=	src
 
@@ -26,9 +26,19 @@ INCLUDES	:=	src
 #---------------------------------------------------------------------------------
 
 PKGCONF	:=	$(DEVKITPRO)/portlibs/wii/bin/powerpc-eabi-pkg-config
-PKGS	:=	sdl2 SDL2_ttf SDL2_mixer
+PKGS	:=	sdl2 SDL2_ttf SDL2_mixer SDL2_image jansson
 
-CFLAGS	= -g -O2 -Wall -Wextra $(MACHDEP) $(INCLUDE) $(shell $(PKGCONF) --cflags $(PKGS))
+# pkg-config runs once here (":="), not once per compile through the recursive CFLAGS below.
+PKG_CFLAGS	:=	$(shell $(PKGCONF) --cflags $(PKGS))
+PKG_LIBS	:=	$(shell $(PKGCONF) --libs $(PKGS))
+
+# WERROR=1 (e.g. `./dev build WERROR=1`) turns any warning into an error: the zero-warning rule.
+WARN	:=	-Wall -Wextra
+ifeq ($(WERROR),1)
+WARN	+=	-Werror
+endif
+
+CFLAGS	= -g -O2 $(WARN) $(MACHDEP) $(INCLUDE) $(PKG_CFLAGS)
 CXXFLAGS	=	$(CFLAGS) -std=gnu++20
 ASFLAGS	=	-g $(MACHDEP) -Wa,-I$(ROOTDIR)
 
@@ -37,7 +47,7 @@ LDFLAGS	=	-g $(MACHDEP) -Wl,-Map,$(notdir $@).map
 #---------------------------------------------------------------------------------
 # any extra libraries we wish to link with the project
 #---------------------------------------------------------------------------------
-LIBS	:=	$(shell $(PKGCONF) --libs $(PKGS))
+LIBS	:=	$(PKG_LIBS)
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing

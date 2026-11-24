@@ -8,9 +8,15 @@
 #   ./dev watch-pc            rebuild + relaunch the Linux version on changes
 #   ./dev clean               remove build output
 #
-#   run / watch / pc / watch-pc accept --screen <home|search|list|detail|dialog>
-#   to start directly on that screen.
+#   run / watch / pc / watch-pc accept dev options, in any order, before any other arguments:
+#     --screen <home|search|list|detail|dialog>   start directly on that screen
+#     --mock                                      use the compiled-in mock catalog
+#     --offline                                   use the cache only, no network
+#     --refresh                                   ignore the cache TTL
+#   On Wii they are written to <app dir>/devstart as key=value lines (env vars don't reach
+#   Dolphin); on PC they are exported as OPENSHOP_START / _MOCK / _OFFLINE / _REFRESH.
 #   Dolphin's virtual SD card is synced with ./sdcard (put bgm.mp3 in sdcard/apps/OpenShop/).
+#   ./sdcard is a symlink to .dolphin/sdcard; .dolphin/ is the only repo dir Dolphin may write to.
 #   ./dev package             build dist/OpenShop.zip for the Homebrew Channel (SD:/apps/OpenShop)
 #   ./dev wiiload             send the .dol to a real Wii running HBC (set WIILOAD=tcp:<wii-ip>)
 #   ./dev headers             copy SDK headers to .devkitpro/ for editor IntelliSense
@@ -18,7 +24,8 @@
 #
 # Toolchain: uses a native devkitPro install if $DEVKITPPC is set, otherwise the
 # official devkitpro/devkitppc container via podman (or docker).
-# Environment overrides: DKP_IMAGE, DOLPHIN, DOLPHIN_ARGS, WATCH_INTERVAL.
+# Environment overrides: DKP_IMAGE, DOLPHIN, DOLPHIN_ARGS, WATCH_INTERVAL,
+# DOLPHIN_STOP_TIMEOUT (seconds to wait for Dolphin to stop cleanly, default 10).
 
 set -euo pipefail
 
@@ -29,9 +36,15 @@ TARGET=OpenShop
 DKP_IMAGE="${DKP_IMAGE:-docker.io/devkitpro/devkitppc:latest}"
 DOLPHIN_APP=org.DolphinEmu.dolphin-emu
 WATCH_INTERVAL="${WATCH_INTERVAL:-1}"
+DOLPHIN_STOP_TIMEOUT="${DOLPHIN_STOP_TIMEOUT:-10}"
 WATCH_PATHS=(src assets Makefile Makefile.pc)
+# ./sdcard is what the user and the PC build use. Dolphin's sync folder is the real directory
+# .dolphin/sdcard (./sdcard is a symlink to it), so the Flatpak only needs write access to .dolphin/.
 SD_DIR="$ROOT/sdcard"
+DOLPHIN_DIR="$ROOT/.dolphin"
+DOLPHIN_SYNC_DIR="$DOLPHIN_DIR/sdcard"
 APP_DIR="$SD_DIR/apps/$TARGET"
+SCREENS=(home search list detail dialog)
 
 c_info=$'\e[1;36m'; c_ok=$'\e[1;32m'; c_err=$'\e[1;31m'; c_off=$'\e[0m'
 info() { echo "${c_info}==>${c_off} $*"; }
@@ -74,23 +87,78 @@ build() {
 
 # ---------------------------------------------------------------- dolphin
 
+# Fills the global DOLPHIN_CMD array. $DOLPHIN may hold a command plus arguments; it is split on
+# whitespace only (no globbing).
 dolphin_cmd() {
 	if [[ -n "${DOLPHIN:-}" ]]; then
-		echo "$DOLPHIN"
+		read -r -a DOLPHIN_CMD <<< "$DOLPHIN"
 	elif flatpak info "$DOLPHIN_APP" >/dev/null 2>&1; then
-		# The sandbox sees the host read-only; the SD sync folder must be writable.
-		echo "flatpak run --filesystem=$SD_DIR --filesystem=$ROOT/build $DOLPHIN_APP"
+		# The sandbox sees the host read-only. Only .dolphin/ is writable: on clean shutdown Dolphin
+		# syncs the virtual SD back by renaming the sync folder to a backup and unpacking a fresh
+		# one, and a rename needs a writable parent directory (.dolphin/, parent of .dolphin/sdcard).
+		DOLPHIN_CMD=(flatpak run "--filesystem=$DOLPHIN_DIR" "$DOLPHIN_APP")
 	elif command -v dolphin-emu >/dev/null; then
-		echo dolphin-emu
+		DOLPHIN_CMD=(dolphin-emu)
 	else
 		err "Dolphin not found. Install it with: flatpak install --user flathub $DOLPHIN_APP"; exit 1
 	fi
 }
 
+# True while the process exists and is not a zombie (a finished child we haven't reaped yet).
+pid_alive() {
+	local st; st="$(ps -o stat= -p "$1" 2>/dev/null)" || return 1
+	[[ -n "$st" && "$st" != Z* ]]
+}
+
+# Pids of the real dolphin-emu process(es) running this project's .elf. Under Flatpak the pid
+# from `flatpak run &` is only a launcher (it even exits on Ctrl+C while the sandbox lives on),
+# and the emulator is visible from the host pid namespace. We compare argv elements exactly
+# ("-e" followed by our .elf path, no regex), which keeps any other Dolphin the user has open
+# out of this.
+dolphin_pids() {
+	local p i
+	local -a argv
+	for p in $(pgrep -x dolphin-emu 2>/dev/null || true); do
+		mapfile -d '' -t argv < "/proc/$p/cmdline" 2>/dev/null || continue
+		for (( i = 0; i + 1 < ${#argv[@]}; i++ )); do
+			if [[ "${argv[i]}" == -e && "${argv[i+1]}" == "$ROOT/$TARGET.elf" ]]; then echo "$p"; break; fi
+		done
+	done
+	return 0
+}
+
+# Block until Dolphin has exited (launcher first, then the emulator itself).
+wait_dolphin_exit() {
+	[[ -f build/.dolphin.pid ]] && { wait "$(cat build/.dolphin.pid)" 2>/dev/null || true; }
+	while [[ -n "$(dolphin_pids)" ]]; do sleep 0.2; done
+	rm -f build/.dolphin.pid
+}
+
+# Stop Dolphin cleanly. Dolphin only syncs the virtual SD back to ./sdcard when emulation
+# shuts down normally. DolphinQt treats SIGINT as "stop emulation and exit" (it prints "A
+# signal was received. A second signal will force Dolphin to stop."), so we send one SIGINT
+# and wait for the process to exit. Force-killing is the last resort and loses SD writes.
+#   stop_dolphin       send SIGINT, then wait
+#   stop_dolphin tty   the terminal's Ctrl+C already reached Dolphin (same process group);
+#                      only wait. A second SIGINT would make Dolphin force-stop, skipping the sync.
 stop_dolphin() {
-	flatpak kill "$DOLPHIN_APP" >/dev/null 2>&1 || true
+	local already_signalled="${1:-}"
+	local pids; pids="$(dolphin_pids)"
+	if [[ -n "$pids" ]]; then
+		[[ "$already_signalled" == tty ]] || kill -INT $pids >/dev/null 2>&1 || true
+		info "Waiting for Dolphin to stop (it syncs the virtual SD card to ./sdcard)"
+		local waited=0 limit=$(( DOLPHIN_STOP_TIMEOUT * 5 ))
+		while [[ -n "$(dolphin_pids)" ]] && (( waited < limit )); do sleep 0.2; waited=$(( waited + 1 )); done
+		pids="$(dolphin_pids)"
+		if [[ -n "$pids" ]]; then
+			err "Dolphin did not stop within ${DOLPHIN_STOP_TIMEOUT}s: force-killing it."
+			err "WARNING: the virtual SD card was probably NOT synced, so files the app wrote this session are lost."
+			# Only this project's pids: `flatpak kill` would take down every Dolphin the user has open.
+			kill -KILL $pids >/dev/null 2>&1 || true
+		fi
+	fi
 	if [[ -f build/.dolphin.pid ]]; then
-		kill "$(cat build/.dolphin.pid)" >/dev/null 2>&1 || true
+		wait "$(cat build/.dolphin.pid)" 2>/dev/null || true
 		rm -f build/.dolphin.pid
 	fi
 }
@@ -102,38 +170,79 @@ stop_dolphin() {
 launch_dolphin() {
 	stop_dolphin
 	prepare_sd
-	# shellcheck disable=SC2206
-	local cmd=($(dolphin_cmd))
-	# shellcheck disable=SC2206
-	local extra=(${DOLPHIN_ARGS:-})
+	dolphin_cmd
+	local cmd=("${DOLPHIN_CMD[@]}")
+	local extra=()
+	[[ -z "${DOLPHIN_ARGS:-}" ]] || read -r -a extra <<< "$DOLPHIN_ARGS"
 	info "Launching Dolphin (logs below, Ctrl+C or close window to stop)"
 	"${cmd[@]}" -b \
 		-C Logger.Options.WriteToConsole=True \
 		-C Logger.Options.Verbosity=2 \
 		-C Logger.Logs.OSREPORT=True \
 		-C Logger.Logs.OSREPORT_HLE=True \
+		-C Dolphin.Interface.ConfirmStop=False \
 		-C Dolphin.Core.WiiSDCard=True \
 		-C Dolphin.Core.WiiSDCardEnableFolderSync=True \
-		-C "Dolphin.General.WiiSDCardSyncFolder=$SD_DIR" \
-		-C "Dolphin.General.WiiSDCardPath=$ROOT/build/dolphin-sd.raw" \
-		"${extra[@]}" \
+		-C "Dolphin.General.WiiSDCardSyncFolder=$DOLPHIN_SYNC_DIR" \
+		-C "Dolphin.General.WiiSDCardPath=$DOLPHIN_DIR/dolphin-sd.raw" \
+		${extra[@]+"${extra[@]}"} \
 		-e "$ROOT/$TARGET.elf" "$@" &
 	echo $! > build/.dolphin.pid
 }
 
+# Copy hbc/meta.xml to $1, with <version> taken from OPENSHOP_VERSION in src/core/Version.h
+# so the two can't drift apart.
+install_meta() {
+	local ver; ver="$(sed -n 's/^#define OPENSHOP_VERSION "\(.*\)"/\1/p' src/core/Version.h)"
+	[[ -n "$ver" ]] || { err "OPENSHOP_VERSION not found in src/core/Version.h"; return 1; }
+	sed "s|<version>[^<]*</version>|<version>$ver</version>|" hbc/meta.xml > "$1"
+}
+
+# Dev options (see top of file) as key=value lines for the Wii build's devstart file.
+devstart_text() {
+	[[ -n "$START_SCREEN" ]] && echo "screen=$START_SCREEN"
+	(( OPT_MOCK )) && echo "mock=1"
+	(( OPT_OFFLINE )) && echo "offline=1"
+	(( OPT_REFRESH )) && echo "refresh=1"
+	return 0
+}
+
+# Make ./sdcard a symlink to the real folder .dolphin/sdcard. An existing real ./sdcard directory
+# (from before this layout) is moved over, not copied, so nothing is lost.
+setup_sd_dirs() {
+	mkdir -p "$DOLPHIN_DIR" build
+	if [[ -L "$SD_DIR" ]]; then
+		[[ "$(readlink "$SD_DIR")" == ".dolphin/sdcard" ]] || { rm "$SD_DIR"; ln -s .dolphin/sdcard "$SD_DIR"; }
+	elif [[ -e "$SD_DIR" ]]; then
+		if [[ -e "$DOLPHIN_SYNC_DIR" ]]; then
+			err "Both ./sdcard and .dolphin/sdcard exist; merge them by hand (keep .dolphin/sdcard), then delete ./sdcard."
+			return 1
+		fi
+		info "Moving ./sdcard to .dolphin/sdcard (./sdcard becomes a symlink to it)"
+		mv "$SD_DIR" "$DOLPHIN_SYNC_DIR"
+		ln -s .dolphin/sdcard "$SD_DIR"
+	else
+		mkdir -p "$DOLPHIN_SYNC_DIR"
+		ln -s .dolphin/sdcard "$SD_DIR"
+	fi
+	mkdir -p "$DOLPHIN_SYNC_DIR"
+}
+
 prepare_sd() {
-	mkdir -p "$APP_DIR" build
-	cp hbc/meta.xml "$APP_DIR/meta.xml"
-	if [[ -n "${START_SCREEN:-}" ]]; then echo "$START_SCREEN" > "$APP_DIR/devstart"
+	setup_sd_dirs
+	mkdir -p "$APP_DIR"
+	install_meta "$APP_DIR/meta.xml"
+	local text; text="$(devstart_text)"
+	if [[ -n "$text" ]]; then echo "$text" > "$APP_DIR/devstart"
 	else rm -f "$APP_DIR/devstart"; fi
 }
 
 # ---------------------------------------------------------------- pc build
 
 pc_build() {
-	if ! pkg-config --exists sdl2 SDL2_ttf SDL2_mixer 2>/dev/null; then
+	if ! pkg-config --exists sdl2 SDL2_ttf SDL2_mixer SDL2_image jansson 2>/dev/null; then
 		err "SDL2 development packages missing. Install them with:"
-		echo "    sudo apt install libsdl2-dev libsdl2-ttf-dev libsdl2-mixer-dev" >&2
+		echo "    sudo apt install libsdl2-dev libsdl2-ttf-dev libsdl2-mixer-dev libjansson-dev libsdl2-image-dev" >&2
 		return 1
 	fi
 	info "Building $TARGET (Linux)"
@@ -143,8 +252,14 @@ pc_build() {
 
 stop_pc() {
 	if [[ -f build-pc/.pid ]]; then
-		kill "$(cat build-pc/.pid)" >/dev/null 2>&1 || true
+		local pid; pid="$(cat build-pc/.pid)"
 		rm -f build-pc/.pid
+		# The pid file can be stale (the pid may have been reused), so only kill an actual openshop.
+		if [[ "$pid" =~ ^[0-9]+$ && "$(cat "/proc/$pid/comm" 2>/dev/null)" == openshop ]]; then
+			kill "$pid" >/dev/null 2>&1 || true
+			local i; for i in $(seq 1 25); do pid_alive "$pid" || break; sleep 0.2; done
+			wait "$pid" 2>/dev/null || true
+		fi
 	fi
 }
 
@@ -152,7 +267,8 @@ launch_pc() {
 	stop_pc
 	prepare_sd
 	info "Launching Linux build (Ctrl+C or close window to stop)"
-	OPENSHOP_DATA="$APP_DIR" ./build-pc/openshop &
+	OPENSHOP_DATA="$APP_DIR" OPENSHOP_START="$START_SCREEN" OPENSHOP_MOCK="$OPT_MOCK" \
+		OPENSHOP_OFFLINE="$OPT_OFFLINE" OPENSHOP_REFRESH="$OPT_REFRESH" ./build-pc/openshop &
 	echo $! > build-pc/.pid
 }
 
@@ -165,7 +281,9 @@ snapshot() {
 # watch <build-fn> <launch-fn> <stop-fn>
 watch() {
 	local build_fn=$1 launch_fn=$2 stop_fn=$3
-	trap "$stop_fn; exit 0" INT TERM
+	# Ctrl+C also reaches Dolphin directly (same process group), so only wait for it on INT.
+	trap "$stop_fn ${STOP_ON_INT:-}; exit 0" INT
+	trap "$stop_fn; exit 0" TERM
 	$build_fn && $launch_fn || true
 	local last; last="$(snapshot)"
 	info "Watching ${WATCH_PATHS[*]} for changes"
@@ -186,7 +304,7 @@ package() {
 	local stage="build/package/apps/$TARGET"
 	rm -rf build/package && mkdir -p "$stage" dist
 	cp "$TARGET.dol" "$stage/boot.dol"
-	cp hbc/meta.xml "$stage/"
+	install_meta "$stage/meta.xml"
 	[[ -f hbc/icon.png ]] && cp hbc/icon.png "$stage/"
 	rm -f "dist/$TARGET.zip"
 	(cd build/package && python3 -m zipfile -c "$ROOT/dist/$TARGET.zip" apps)
@@ -208,15 +326,30 @@ headers() {
 usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; }
 
 cmd="${1:-}"; shift || true
-START_SCREEN=""
-if [[ "${1:-}" == "--screen" ]]; then START_SCREEN="${2:?--screen needs a name}"; shift 2; fi
+START_SCREEN=""; OPT_MOCK=0; OPT_OFFLINE=0; OPT_REFRESH=0
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+		--screen)
+			START_SCREEN="${2:-}"
+			case " ${SCREENS[*]} " in
+				*" $START_SCREEN "*) [[ -n "$START_SCREEN" ]] || { err "--screen needs a name (${SCREENS[*]})"; exit 1; } ;;
+				*) err "--screen: '${2:-}' is not one of: ${SCREENS[*]}"; exit 1 ;;
+			esac
+			shift 2 ;;
+		--mock)    OPT_MOCK=1; shift ;;
+		--offline) OPT_OFFLINE=1; shift ;;
+		--refresh) OPT_REFRESH=1; shift ;;
+		*) break ;;
+	esac
+done
 case "$cmd" in
 	build)    build "$@" ;;
-	run)      build && { trap 'stop_dolphin; exit 0' INT TERM; launch_dolphin "$@"; wait; } ;;
-	watch)    watch build launch_dolphin stop_dolphin ;;
-	pc)       pc_build && { trap 'stop_pc; exit 0' INT TERM; launch_pc; wait; } ;;
+	run)      build && { trap 'stop_dolphin tty; exit 0' INT; trap 'stop_dolphin; exit 0' TERM
+	                     launch_dolphin "$@"; wait_dolphin_exit; } ;;
+	watch)    STOP_ON_INT=tty watch build launch_dolphin stop_dolphin ;;
+	pc)       pc_build && { trap 'stop_pc; exit 0' INT TERM; launch_pc; wait "$(cat build-pc/.pid)" || true; rm -f build-pc/.pid; } ;;
 	watch-pc) watch pc_build launch_pc stop_pc ;;
-	clean)    dkp make clean; make -f Makefile.pc clean >/dev/null; rm -rf dist ;;
+	clean)    dkp make clean; make -f Makefile.pc clean >/dev/null; make -f Makefile.pc SAN=1 clean >/dev/null; rm -rf dist ;;
 	package) package ;;
 	wiiload)
 		[[ -n "${WIILOAD:-}" ]] || { err "Set WIILOAD=tcp:<wii-ip> first"; exit 1; }

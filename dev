@@ -1,0 +1,227 @@
+#!/usr/bin/env bash
+# OpenShop dev workflow: build with devkitPPC, test in Dolphin.
+#
+#   ./dev build [make args]   build OpenShop.elf / OpenShop.dol
+#   ./dev run                 build, then (re)launch in Dolphin with logs in this terminal
+#   ./dev watch               rebuild + relaunch Dolphin whenever source changes
+#   ./dev pc                  build + run the native Linux version (fast UI iteration)
+#   ./dev watch-pc            rebuild + relaunch the Linux version on changes
+#   ./dev clean               remove build output
+#
+#   run / watch / pc / watch-pc accept --screen <home|search|list|detail|dialog>
+#   to start directly on that screen.
+#   Dolphin's virtual SD card is synced with ./sdcard (put bgm.mp3 in sdcard/apps/OpenShop/).
+#   ./dev package             build dist/OpenShop.zip for the Homebrew Channel (SD:/apps/OpenShop)
+#   ./dev wiiload             send the .dol to a real Wii running HBC (set WIILOAD=tcp:<wii-ip>)
+#   ./dev headers             copy SDK headers to .devkitpro/ for editor IntelliSense
+#   ./dev shell               open a shell inside the toolchain container
+#
+# Toolchain: uses a native devkitPro install if $DEVKITPPC is set, otherwise the
+# official devkitpro/devkitppc container via podman (or docker).
+# Environment overrides: DKP_IMAGE, DOLPHIN, DOLPHIN_ARGS, WATCH_INTERVAL.
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT"
+
+TARGET=OpenShop
+DKP_IMAGE="${DKP_IMAGE:-docker.io/devkitpro/devkitppc:latest}"
+DOLPHIN_APP=org.DolphinEmu.dolphin-emu
+WATCH_INTERVAL="${WATCH_INTERVAL:-1}"
+WATCH_PATHS=(src assets Makefile Makefile.pc)
+SD_DIR="$ROOT/sdcard"
+APP_DIR="$SD_DIR/apps/$TARGET"
+
+c_info=$'\e[1;36m'; c_ok=$'\e[1;32m'; c_err=$'\e[1;31m'; c_off=$'\e[0m'
+info() { echo "${c_info}==>${c_off} $*"; }
+ok()   { echo "${c_ok}==>${c_off} $*"; }
+err()  { echo "${c_err}==>${c_off} $*" >&2; }
+
+# ---------------------------------------------------------------- toolchain
+
+container_cmd() {
+	if command -v podman >/dev/null; then echo podman
+	elif command -v docker >/dev/null; then echo docker
+	else err "No devkitPPC found: install devkitPro (wii-dev) or podman/docker."; exit 1
+	fi
+}
+
+# Run a command with the devkitPPC environment available.
+dkp() {
+	if [[ -n "${DEVKITPPC:-}" ]]; then
+		"$@"
+	else
+		local engine; engine="$(container_cmd)"
+		local tty=(); [[ -t 0 && -t 1 ]] && tty=(-it)
+		local userns=(); [[ "$engine" == podman ]] && userns=(--userns=keep-id)
+		# Mount the project at the same path so debug info / error paths match the host.
+		"$engine" run --rm "${tty[@]}" "${userns[@]}" \
+			-v "$ROOT:$ROOT" -w "$ROOT" \
+			-e WIILOAD="${WIILOAD:-}" \
+			"$DKP_IMAGE" "$@"
+	fi
+}
+
+build() {
+	info "Building $TARGET"
+	if dkp make -j"$(nproc)" "$@"; then
+		ok "Built $TARGET.dol"
+	else
+		err "Build failed"; return 1
+	fi
+}
+
+# ---------------------------------------------------------------- dolphin
+
+dolphin_cmd() {
+	if [[ -n "${DOLPHIN:-}" ]]; then
+		echo "$DOLPHIN"
+	elif flatpak info "$DOLPHIN_APP" >/dev/null 2>&1; then
+		# The sandbox sees the host read-only; the SD sync folder must be writable.
+		echo "flatpak run --filesystem=$SD_DIR --filesystem=$ROOT/build $DOLPHIN_APP"
+	elif command -v dolphin-emu >/dev/null; then
+		echo dolphin-emu
+	else
+		err "Dolphin not found. Install it with: flatpak install --user flathub $DOLPHIN_APP"; exit 1
+	fi
+}
+
+stop_dolphin() {
+	flatpak kill "$DOLPHIN_APP" >/dev/null 2>&1 || true
+	if [[ -f build/.dolphin.pid ]]; then
+		kill "$(cat build/.dolphin.pid)" >/dev/null 2>&1 || true
+		rm -f build/.dolphin.pid
+	fi
+}
+
+# Launch Dolphin on the .elf (keeps symbols for Dolphin's debugger).
+# -b exits Dolphin when emulation stops, so closing the game closes the window.
+# The -C overrides route the OSREPORT log channel (SYS_Report / LOG()) to stdout and
+# point the virtual SD card at ./sdcard, without touching your saved Dolphin settings.
+launch_dolphin() {
+	stop_dolphin
+	prepare_sd
+	# shellcheck disable=SC2206
+	local cmd=($(dolphin_cmd))
+	# shellcheck disable=SC2206
+	local extra=(${DOLPHIN_ARGS:-})
+	info "Launching Dolphin (logs below, Ctrl+C or close window to stop)"
+	"${cmd[@]}" -b \
+		-C Logger.Options.WriteToConsole=True \
+		-C Logger.Options.Verbosity=2 \
+		-C Logger.Logs.OSREPORT=True \
+		-C Logger.Logs.OSREPORT_HLE=True \
+		-C Dolphin.Core.WiiSDCard=True \
+		-C Dolphin.Core.WiiSDCardEnableFolderSync=True \
+		-C "Dolphin.General.WiiSDCardSyncFolder=$SD_DIR" \
+		-C "Dolphin.General.WiiSDCardPath=$ROOT/build/dolphin-sd.raw" \
+		"${extra[@]}" \
+		-e "$ROOT/$TARGET.elf" "$@" &
+	echo $! > build/.dolphin.pid
+}
+
+prepare_sd() {
+	mkdir -p "$APP_DIR" build
+	cp hbc/meta.xml "$APP_DIR/meta.xml"
+	if [[ -n "${START_SCREEN:-}" ]]; then echo "$START_SCREEN" > "$APP_DIR/devstart"
+	else rm -f "$APP_DIR/devstart"; fi
+}
+
+# ---------------------------------------------------------------- pc build
+
+pc_build() {
+	if ! pkg-config --exists sdl2 SDL2_ttf SDL2_mixer 2>/dev/null; then
+		err "SDL2 development packages missing. Install them with:"
+		echo "    sudo apt install libsdl2-dev libsdl2-ttf-dev libsdl2-mixer-dev" >&2
+		return 1
+	fi
+	info "Building $TARGET (Linux)"
+	if make -f Makefile.pc -j"$(nproc)" "$@"; then ok "Built build-pc/openshop"
+	else err "Build failed"; return 1; fi
+}
+
+stop_pc() {
+	if [[ -f build-pc/.pid ]]; then
+		kill "$(cat build-pc/.pid)" >/dev/null 2>&1 || true
+		rm -f build-pc/.pid
+	fi
+}
+
+launch_pc() {
+	stop_pc
+	prepare_sd
+	info "Launching Linux build (Ctrl+C or close window to stop)"
+	OPENSHOP_DATA="$APP_DIR" ./build-pc/openshop &
+	echo $! > build-pc/.pid
+}
+
+# ---------------------------------------------------------------- watch
+
+snapshot() {
+	find "${WATCH_PATHS[@]}" -type f -printf '%p %T@\n' 2>/dev/null | sort | md5sum
+}
+
+# watch <build-fn> <launch-fn> <stop-fn>
+watch() {
+	local build_fn=$1 launch_fn=$2 stop_fn=$3
+	trap "$stop_fn; exit 0" INT TERM
+	$build_fn && $launch_fn || true
+	local last; last="$(snapshot)"
+	info "Watching ${WATCH_PATHS[*]} for changes"
+	while sleep "$WATCH_INTERVAL"; do
+		local now; now="$(snapshot)"
+		[[ "$now" == "$last" ]] && continue
+		last="$now"
+		echo
+		info "Change detected"
+		$build_fn && $launch_fn || err "Build failed, keeping the previous session"
+	done
+}
+
+# ---------------------------------------------------------------- misc
+
+package() {
+	build
+	local stage="build/package/apps/$TARGET"
+	rm -rf build/package && mkdir -p "$stage" dist
+	cp "$TARGET.dol" "$stage/boot.dol"
+	cp hbc/meta.xml "$stage/"
+	[[ -f hbc/icon.png ]] && cp hbc/icon.png "$stage/"
+	rm -f "dist/$TARGET.zip"
+	(cd build/package && python3 -m zipfile -c "$ROOT/dist/$TARGET.zip" apps)
+	ok "dist/$TARGET.zip (extract to SD card root)"
+}
+
+headers() {
+	local out="$ROOT/.devkitpro"
+	info "Copying SDK headers to .devkitpro/"
+	rm -rf "$out" && mkdir -p "$out"
+	dkp bash -c "cd \$DEVKITPRO && tar ch libogc/include devkitPPC/powerpc-eabi/include \
+		devkitPPC/lib/gcc/powerpc-eabi/*/include portlibs/ppc/include portlibs/wii/include" \
+		| tar x -C "$out"
+	ln -sfn "$(cd "$out/devkitPPC/lib/gcc/powerpc-eabi" && ls | head -1)/include" \
+		"$out/devkitPPC/lib/gcc/powerpc-eabi/current"
+	ok "Headers ready ($(du -sh "$out" | cut -f1))"
+}
+
+usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; }
+
+cmd="${1:-}"; shift || true
+START_SCREEN=""
+if [[ "${1:-}" == "--screen" ]]; then START_SCREEN="${2:?--screen needs a name}"; shift 2; fi
+case "$cmd" in
+	build)    build "$@" ;;
+	run)      build && { trap 'stop_dolphin; exit 0' INT TERM; launch_dolphin "$@"; wait; } ;;
+	watch)    watch build launch_dolphin stop_dolphin ;;
+	pc)       pc_build && { trap 'stop_pc; exit 0' INT TERM; launch_pc; wait; } ;;
+	watch-pc) watch pc_build launch_pc stop_pc ;;
+	clean)    dkp make clean; make -f Makefile.pc clean >/dev/null; rm -rf dist ;;
+	package) package ;;
+	wiiload)
+		[[ -n "${WIILOAD:-}" ]] || { err "Set WIILOAD=tcp:<wii-ip> first"; exit 1; }
+		build && dkp bash -c "\$DEVKITPRO/tools/bin/wiiload $TARGET.dol" ;;
+	headers) headers ;;
+	shell)   dkp bash ;;
+	*)       usage ;;
+esac

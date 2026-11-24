@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<app version="1">
+	<name>OpenShop</name>
+	<coder></coder>
+	<version>0.1.0</version>
+	<release_date></release_date>
+	<short_description>OpenShop</short_description>
+	<long_description>OpenShop homebrew application.</long_description>
+</app>

@@ -1,0 +1,5 @@
+{
+  "files.associations": { "*.h": "c" },
+  "search.exclude": { ".devkitpro": true, "build": true },
+  "files.watcherExclude": { "**/.devkitpro/**": true, "**/build/**": true }
+}

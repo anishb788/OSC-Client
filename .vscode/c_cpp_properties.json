@@ -1,0 +1,40 @@
+{
+  "configurations": [
+    {
+      "name": "Wii (devkitPPC)",
+      "includePath": [
+        "${workspaceFolder}/src",
+        "${workspaceFolder}/.devkitpro/libogc/include",
+        "${workspaceFolder}/.devkitpro/portlibs/wii/include",
+        "${workspaceFolder}/.devkitpro/portlibs/wii/include/SDL2",
+        "${workspaceFolder}/.devkitpro/portlibs/ppc/include",
+        "${workspaceFolder}/.devkitpro/portlibs/ppc/include/freetype2"
+      ],
+      "browse": {
+        "path": [
+          "${workspaceFolder}"
+        ]
+      },
+      "compilerPath": "",
+      "compilerArgs": [
+        "-nostdinc"
+      ],
+      "defines": [
+        "GEKKO",
+        "HW_RVL",
+        "__wii__",
+        "__PPC__",
+        "__BIG_ENDIAN__",
+        "_REENTRANT"
+      ],
+      "systemIncludePath": [
+        "${workspaceFolder}/.devkitpro/devkitPPC/lib/gcc/powerpc-eabi/current/include",
+        "${workspaceFolder}/.devkitpro/devkitPPC/powerpc-eabi/include"
+      ],
+      "cStandard": "gnu17",
+      "cppStandard": "gnu++20",
+      "intelliSenseMode": "linux-gcc-x86"
+    }
+  ],
+  "version": 4
+}

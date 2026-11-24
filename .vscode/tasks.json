@@ -1,0 +1,59 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Wii: Build",
+      "type": "shell",
+      "command": "./dev build",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": "$gcc"
+    },
+    {
+      "label": "Wii: Run in Dolphin",
+      "type": "shell",
+      "command": "./dev run",
+      "isBackground": true,
+      "problemMatcher": "$gcc",
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "PC: Run (Linux build)",
+      "type": "shell",
+      "command": "./dev pc",
+      "isBackground": true,
+      "problemMatcher": "$gcc"
+    },
+    {
+      "label": "PC: Watch (rebuild + relaunch)",
+      "type": "shell",
+      "command": "./dev watch-pc",
+      "isBackground": true,
+      "problemMatcher": "$gcc"
+    },
+    {
+      "label": "Wii: Watch (rebuild + relaunch Dolphin)",
+      "type": "shell",
+      "command": "./dev watch",
+      "isBackground": true,
+      "problemMatcher": "$gcc"
+    },
+    {
+      "label": "Wii: Clean",
+      "type": "shell",
+      "command": "./dev clean",
+      "problemMatcher": []
+    },
+    {
+      "label": "Wii: Package for HBC",
+      "type": "shell",
+      "command": "./dev package",
+      "problemMatcher": []
+    }
+  ]
+}

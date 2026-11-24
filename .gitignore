@@ -1,0 +1,9 @@
+build/
+dist/
+*.elf
+*.dol
+*.map
+.devkitpro/
+sdcard/
+build-pc/
+Screenshot from 2026-11-23 17-37-49.png

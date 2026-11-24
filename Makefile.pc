@@ -1,0 +1,30 @@
+# Native Linux build of OpenShop for fast UI iteration (mouse = Wii Remote pointer).
+# Requires: libsdl2-dev libsdl2-ttf-dev libsdl2-mixer-dev
+CXX      ?= g++
+BUILD    := build-pc
+TARGET   := $(BUILD)/openshop
+PKGS     := sdl2 SDL2_ttf SDL2_mixer
+
+CXXFLAGS := -std=gnu++20 -g -O1 -Wall -Wextra -Isrc -MMD -MP $(shell pkg-config --cflags $(PKGS))
+ASFLAGS  := -Wa,-I.
+LDLIBS   := $(shell pkg-config --libs $(PKGS)) -lm
+
+SRCS := $(shell find src -name '*.cpp')
+OBJS := $(SRCS:%.cpp=$(BUILD)/%.o) $(BUILD)/src/assets.o
+
+$(TARGET): $(OBJS)
+	$(CXX) -o $@ $^ $(LDLIBS)
+
+$(BUILD)/%.o: %.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(BUILD)/src/assets.o: src/assets.S $(wildcard assets/fonts/*.ttf)
+	@mkdir -p $(dir $@)
+	$(CXX) $(ASFLAGS) -c $< -o $@
+
+clean:
+	rm -rf $(BUILD)
+
+-include $(OBJS:.o=.d)
+.PHONY: clean

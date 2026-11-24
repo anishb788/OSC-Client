@@ -5,8 +5,6 @@
 #include "ui/Widgets.h"
 
 namespace {
-const std::vector<SortMode> kAllSorts = {SortMode::Popular, SortMode::Newest, SortMode::Name};
-
 class HomeScreen : public Screen {
 public:
 	void draw(App& app, Ui& ui) override {
@@ -19,6 +17,8 @@ public:
 		// Left column: featured app + quick actions.
 		float lw = std::round(W * 0.40f);
 		Rect feat{m, top, lw, 186};
+		// Future in-session refresh: `f` is only used within this frame (and handed to Detail, see there), so a
+		// replaced catalog would be picked up automatically here; only the pushed screens keep references.
 		if (const AppEntry* f = app.catalog.featured()) {
 			Id id = makeId("home:featured");
 			if (ui.item(id, feat)) app.push(makeDetailScreen(*f));
@@ -63,6 +63,7 @@ public:
 
 		drawBottomBar(ui);
 		float by = H - theme::bottomBarH + 12;
+		ui.silenceNextActivation(); // quitPrompt() plays the HOME chime instead of the click
 		bool exitClicked = pillButton(ui, makeId("home:exit"), {m, by, 120, 40}, platform::exitLabel(),
 		                              Pill::Normal, nullptr, 17);
 		if (exitClicked || ui.pressed(BTN_BACK)) app.quitPrompt();

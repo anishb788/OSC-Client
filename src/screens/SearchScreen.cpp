@@ -11,6 +11,10 @@ namespace {
 const char* const kRows[] = {"1234567890", "qwertyuiop", "asdfghjkl'", "zxcvbnm-.+"};
 constexpr size_t kMaxQuery = 40;
 
+// Future in-session refresh: `results` holds `const AppEntry*` into App::catalog, which is installed once and
+// never replaced (see App::catalog). If the catalog could ever be refreshed in-session, re-run the query
+// (`app.catalog.search(query)`) after the swap instead of keeping these pointers, or hold a
+// shared_ptr<const Catalog> snapshot.
 // Search with an on-screen keyboard (pointer or D-pad); USB / PC keyboards type directly.
 class SearchScreen : public Screen {
 public:
@@ -82,8 +86,7 @@ public:
 			if (query.empty() || results.empty()) {
 				audio::play(audio::Sfx::Error);
 			} else {
-				app.push(makeListScreen("“" + query + "”", results, {SortMode::Relevance, SortMode::Popular, SortMode::Newest},
-				                        SortMode::Relevance));
+				openResults(app);
 			}
 		}
 
@@ -91,12 +94,14 @@ public:
 		if (backButton(ui)) app.pop();
 		ui.t.drawIn(Font::Medium, 14, "+ searches", {W - theme::margin - 300, H - theme::bottomBarH + 12, 300, 40},
 		            theme::textMuted, Align::Right);
-		if (ui.pressed(BTN_PLUS) && !query.empty() && !results.empty())
-			app.push(makeListScreen("“" + query + "”", results, {SortMode::Relevance, SortMode::Popular, SortMode::Newest},
-			                        SortMode::Relevance));
+		if (ui.pressed(BTN_PLUS) && !query.empty() && !results.empty()) openResults(app);
 	}
 
 private:
+	void openResults(App& app) {
+		app.push(makeListScreen("“" + query + "”", results, kSearchSorts, SortMode::Relevance));
+	}
+
 	// `on` draws the key latched (used by Shift).
 	bool key(Ui& ui, Id id, Rect r, const std::string& label, bool on = false) {
 		bool clicked = ui.item(id, r);

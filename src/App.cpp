@@ -7,6 +7,7 @@
 #include <jansson.h>
 
 #include "audio/Audio.h"
+#include "catalog/InstallGuard.h"
 #include "core/Log.h"
 #include "core/Version.h"
 #include "gfx/Theme.h"
@@ -44,11 +45,9 @@ bool App::init(int argc, char** argv) {
 	if (IMG_Init(IMG_INIT_PNG) & IMG_INIT_PNG) LOG("SDL2_image: PNG support initialised");
 	else LOG("SDL2_image: IMG_Init(PNG) failed: %s", IMG_GetError());
 
-	loadMockCatalog(catalog);
-	LOG("Catalog: %d apps (mock data)", (int)catalog.apps.size());
-
-	stack.push_back(makeHomeScreen());
-	openDevStartScreen();
+	auto loading = makeLoadingScreen(LoaderOptions::from(opts));
+	loadingScreen = loading.get();
+	stack.push_back(std::move(loading));
 	return true;
 }
 
@@ -59,9 +58,8 @@ void App::openDevStartScreen() {
 	if (which.empty() || which == "home") return;
 	LOG("Dev start screen: %s", which.c_str());
 
-	const std::vector<SortMode> sorts = {SortMode::Popular, SortMode::Newest, SortMode::Name};
 	if (which == "search") stack.push_back(makeSearchScreen());
-	else if (which == "list") stack.push_back(makeListScreen("Games", catalog.inCategory("games"), sorts, SortMode::Popular));
+	else if (which == "list") stack.push_back(makeListScreen("Games", catalog.inCategory("games"), kAllSorts, SortMode::Popular));
 	else if (which == "detail" && catalog.featured()) stack.push_back(makeDetailScreen(*catalog.featured()));
 	else if (which == "dialog") quitPrompt();
 	else LOG("Unknown start screen '%s' (home, search, list, detail, dialog)", which.c_str());
@@ -89,8 +87,45 @@ void App::pop() {
 	fadeDir = 1;
 }
 
+bool App::resetTo(std::unique_ptr<Screen> s, bool openDevStart) {
+	if (fadeDir == 1) return false; // a transition is already fading out
+	pendingReset = std::move(s);
+	resetOpensDevStart = openDevStart;
+	fadeDir = 1;
+	return true;
+}
+
+bool App::installCatalog(Catalog&& c) {
+	InstallState st;
+	st.alreadyInstalled = catalogInstalled;
+	st.onlyLoadingScreen = stack.size() == 1 && stack.front().get() == loadingScreen;
+	st.screenChangePending = pendingPush || pendingReset || pendingPop;
+	if (const char* why = catalogInstallRefusal(st)) {
+		LOG("installCatalog refused: %s", why);
+		return false;
+	}
+	catalog_ = std::move(c);
+	catalogInstalled = true;
+	LOG("Catalog installed: %d apps", (int)catalog_.apps.size());
+	return true;
+}
+
 void App::showDialog(Dialog d) {
+	// Every new dialog starts with fresh focus. This matters when one dialog replaces another (e.g. opened from an
+	// onChoose/onCancel callback, which runs after the old dialog is reset): the modal depth stays 1, so Ui sees no
+	// layer change and would otherwise keep the old dialog's button focused.
+	ui.clearFocus();
 	dialog = std::move(d);
+	dialogAnim = 0;
+}
+
+void App::dropDialog() {
+	if (!dialog) return;
+	std::function<void()> cb;
+	if (dialog->kind == Dialog::Kind::Progress) cb = std::move(dialog->onCancel);
+	dialog.reset();
+	if (cb) cb();
+	dialog.reset(); // a callback must not resurrect a dialog across a reset
 	dialogAnim = 0;
 }
 
@@ -105,7 +140,9 @@ void App::quitPrompt() {
 	d.buttons = {"Cancel", platform::exitLabel()};
 	d.cancelIndex = 0;
 	d.primaryIndex = 1;
+	d.pausesMusic = true;
 	d.onChoose = [this](int i) { if (i == 1) quit(); };
+	audio::play(audio::Sfx::Home);
 	showDialog(std::move(d));
 }
 
@@ -127,6 +164,16 @@ void App::run() {
 			fade += fadeDir * dt * 7.0f;
 			if (fadeDir == 1 && fade >= 1) {
 				fade = 1;
+				if (pendingReset) {
+					dropDialog();
+					stack.clear();
+					loadingScreen = nullptr; // it was just destroyed (it only ever lives at the bottom of the stack)
+					stack.push_back(std::move(pendingReset));
+					pendingPush.reset();
+					pendingPop = false;
+					if (resetOpensDevStart) openDevStartScreen();
+					resetOpensDevStart = false;
+				}
 				if (pendingPop && stack.size() > 1) stack.pop_back();
 				if (pendingPush) stack.push_back(std::move(pendingPush));
 				pendingPop = false;
@@ -138,13 +185,12 @@ void App::run() {
 			}
 		}
 		ui.inputEnabled = fadeDir == 0;
+		ui.setModalDepth(dialog ? 1 : 0);
 		ui.beginFrame(in, dt);
 
 		if (ui.inputEnabled && (in.pressed & BTN_ONE) && audio::hasMusic()) audio::toggleMusic();
-		if (ui.inputEnabled && !dialog && (in.pressed & BTN_HOME)) {
-			audio::play(audio::Sfx::Select);
-			quitPrompt();
-		}
+		if (ui.inputEnabled && !dialog && (in.pressed & BTN_HOME) && !stack.back()->handleHome(*this)) quitPrompt();
+		audio::setMusicSuspended(dialog && dialog->pausesMusic);
 
 		gfx.beginFrame();
 		gfx.background();
@@ -154,7 +200,6 @@ void App::run() {
 		if (in.pointerValid) gfx.cursor(in.px, in.py);
 		gfx.endFrame();
 
-		ui.endFrame();
 		text.endFrame();
 	}
 }
@@ -176,6 +221,8 @@ void App::drawDialog() {
 			d.message = d.doneMessage;
 			d.buttons = {"OK"};
 			d.primaryIndex = 0;
+			d.cancelIndex = 0;
+			d.onCancel = nullptr; // the work finished; only onChoose(0) is left to report
 			audio::play(audio::Sfx::Select);
 		}
 	}
@@ -185,7 +232,7 @@ void App::drawDialog() {
 	float lh = (float)text.lineHeight(Font::Medium, 17);
 	float bodyH = lines.size() * lh + (d.kind == Dialog::Kind::Progress ? 56 : 0);
 	float ph = 34 + 34 + 12 + bodyH + 26 + 46 + 24;
-	if (d.kind == Dialog::Kind::Progress) ph -= 46;
+	if (d.kind == Dialog::Kind::Progress && !d.cancellable) ph -= 46;
 	float scale = 0.92f + 0.08f * a;
 	Rect p{W / 2 - pw * scale / 2, H / 2 - ph * scale / 2 + (1 - a) * 12, pw * scale, ph * scale};
 
@@ -206,6 +253,19 @@ void App::drawDialog() {
 		gfx.fillRoundRect(bar, 8, theme::panel);
 		if (d.progress > 0.02f) gfx.fillRoundRect({bar.x, bar.y, bar.w * d.progress, bar.h}, 8, theme::accent);
 		gfx.spinner(bar.cx(), bar.bottom() + 26, 10, ui.time, theme::accent);
+		if (d.cancellable) {
+			Id id = makeId("dialog:cancel");
+			bool cancel = pillButton(ui, id, {p.cx() - 85, p.bottom() - 24 - 46, 170, 46}, "Cancel");
+			ui.setDefaultFocus(id);
+			if (!cancel && ui.pressed(BTN_BACK)) { cancel = true; audio::play(audio::Sfx::Back); }
+			if (cancel) {
+				auto cb = std::move(d.onCancel);
+				ui.popLayer();
+				dialog.reset();
+				if (cb) cb();
+				return;
+			}
+		}
 		ui.popLayer();
 		return;
 	}

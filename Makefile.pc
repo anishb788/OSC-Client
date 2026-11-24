@@ -45,8 +45,15 @@ $(TESTBIN): tests/catalog_test.cpp src/catalog/Catalog.cpp src/catalog/MockCatal
 	@mkdir -p $(dir $@)
 	$(CXX) $(TESTCXX) -o $@ tests/catalog_test.cpp src/catalog/Catalog.cpp src/catalog/MockCatalog.cpp
 
-test: $(TESTBIN)
+CORETEST := $(BUILD)/tests/core_test
+
+$(CORETEST): tests/core_test.cpp src/core/DevOptions.cpp src/core/DevOptions.h src/catalog/InstallGuard.h
+	@mkdir -p $(dir $@)
+	$(CXX) $(TESTCXX) -o $@ tests/core_test.cpp src/core/DevOptions.cpp
+
+test: $(TESTBIN) $(CORETEST)
 	$(TESTBIN)
+	$(CORETEST)
 
 clean:
 	rm -rf $(BUILD)

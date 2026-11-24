@@ -2,6 +2,7 @@
 
 #include <SDL_mixer.h>
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -12,7 +13,8 @@ namespace {
 bool gOpen = false;
 Mix_Music* gMusic = nullptr;
 bool gMusicOn = true;
-Mix_Chunk* gSfx[5] = {};
+bool gSuspended = false;
+Mix_Chunk* gSfx[(int)Sfx::Count] = {};
 
 constexpr int kSynthRate = 48000;
 constexpr int kMusicVolume = MIX_MAX_VOLUME * 55 / 100;
@@ -31,6 +33,36 @@ std::vector<Sint16> blip(float f0, float f1, float seconds, float gain) {
 		out[i] = (Sint16)(s * env * gain * 32767);
 	}
 	return out;
+}
+
+// The HOME menu chime (original, not a sample of anything): two soft bell-like notes a fifth apart, the
+// second starting 70 ms after the first, each with a couple of quiet overtones and a gentle decay.
+std::vector<Sint16> chime(float gain) {
+	const float seconds = 0.55f;
+	const struct { float freq, start; } notes[] = {{1046.5f, 0.0f}, {1568.0f, 0.07f}}; // C6, G6
+	int n = (int)(seconds * kSynthRate);
+	std::vector<float> mix(n, 0.0f);
+	for (auto& note : notes) {
+		int s0 = (int)(note.start * kSynthRate);
+		for (int i = s0; i < n; i++) {
+			float t = (float)(i - s0) / kSynthRate;
+			float env = std::min(1.0f, t / 0.003f) * std::exp(-7.0f * t);
+			double w = 2.0 * M_PI * note.freq * t;
+			mix[i] += (float)(std::sin(w) * 0.75 + std::sin(w * 2.0) * 0.18 + std::sin(w * 3.0) * 0.07) * env * 0.5f;
+		}
+	}
+	// The decay has not quite reached zero at the end; a 10 ms linear fade-out avoids a click when it stops.
+	const int fade = kSynthRate / 100;
+	for (int i = 0; i < fade; i++) mix[n - fade + i] *= 1.0f - (float)(i + 1) / fade;
+	std::vector<Sint16> out(n);
+	for (int i = 0; i < n; i++) out[i] = (Sint16)(std::clamp(mix[i] * gain, -1.0f, 1.0f) * 32767);
+	return out;
+}
+
+// Applies the combined state: music plays only when the user wants it and nothing suspends it.
+void applyMusicState() {
+	if (!gMusic) return;
+	if (gMusicOn && !gSuspended) Mix_ResumeMusic(); else Mix_PauseMusic();
 }
 
 // Converts mono S16 at kSynthRate into the mixer's format.
@@ -64,6 +96,7 @@ void init(const std::string& dataDir) {
 	gSfx[(int)Sfx::Back] = makeChunk(blip(1100, 700, 0.09f, 0.20f));
 	gSfx[(int)Sfx::Page] = makeChunk(blip(1250, 1500, 0.06f, 0.14f));
 	gSfx[(int)Sfx::Error] = makeChunk(blip(320, 260, 0.16f, 0.25f));
+	gSfx[(int)Sfx::Home] = makeChunk(chime(0.32f));
 
 	for (const char* name : {"bgm.mp3", "bgm.ogg"}) {
 		std::string path = dataDir + "/" + name;
@@ -98,6 +131,16 @@ bool musicEnabled() { return gMusic && gMusicOn; }
 void toggleMusic() {
 	if (!gMusic) return;
 	gMusicOn = !gMusicOn;
-	if (gMusicOn) Mix_ResumeMusic(); else Mix_PauseMusic();
+	applyMusicState();
+}
+
+void setMusicSuspended(bool suspended) {
+	if (suspended == gSuspended) return;
+	gSuspended = suspended;
+	if (gMusic) {
+		if (suspended) LOG("Music paused (menu open)");
+		else LOG("Menu closed: music %s", gMusicOn ? "resumed" : "stays off (switched off by the user)");
+	}
+	applyMusicState();
 }
 } // namespace audio

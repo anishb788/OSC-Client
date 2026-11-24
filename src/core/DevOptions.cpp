@@ -1,8 +1,7 @@
 #include "core/DevOptions.h"
 
-#include <SDL.h>
-
-#include "platform/Platform.h"
+#include <cstdio>
+#include <cstdlib>
 
 namespace {
 std::string trim(const std::string& s) {
@@ -12,6 +11,17 @@ std::string trim(const std::string& s) {
 
 bool truthy(const std::string& v) {
 	return !v.empty() && v != "0" && v != "false" && v != "no" && v != "off";
+}
+
+// Plain stdio and getenv (no SDL or platform layer) so the host tests can link this file on its own.
+bool readSmallFile(const std::string& path, std::string& out) {
+	std::FILE* f = std::fopen(path.c_str(), "rb");
+	if (!f) return false;
+	char buf[512];
+	size_t n;
+	while ((n = std::fread(buf, 1, sizeof buf, f)) > 0 && out.size() < 4096) out.append(buf, n);
+	std::fclose(f);
+	return true;
 }
 } // namespace
 
@@ -30,21 +40,23 @@ void DevOptions::parseFile(const std::string& text, DevOptions& o) {
 		else if (key == "mock") o.mock = truthy(val);
 		else if (key == "offline") o.offline = truthy(val);
 		else if (key == "refresh") o.refresh = truthy(val);
+		else if (key == "fail") o.fail = truthy(val);
 	}
 }
 
 DevOptions DevOptions::load(const std::string& dataDir) {
 	DevOptions o;
 	std::string text;
-	if (platform::readFile(dataDir + "/devstart", text)) parseFile(text, o);
-	if (const char* v = SDL_getenv("OPENSHOP_START"); v && *v) o.screen = v;
-	if (const char* v = SDL_getenv("OPENSHOP_MOCK"); v && *v) o.mock = truthy(v);
-	if (const char* v = SDL_getenv("OPENSHOP_OFFLINE"); v && *v) o.offline = truthy(v);
-	if (const char* v = SDL_getenv("OPENSHOP_REFRESH"); v && *v) o.refresh = truthy(v);
+	if (readSmallFile(dataDir + "/devstart", text)) parseFile(text, o);
+	if (const char* v = std::getenv("OPENSHOP_START"); v && *v) o.screen = v;
+	if (const char* v = std::getenv("OPENSHOP_MOCK"); v && *v) o.mock = truthy(v);
+	if (const char* v = std::getenv("OPENSHOP_OFFLINE"); v && *v) o.offline = truthy(v);
+	if (const char* v = std::getenv("OPENSHOP_REFRESH"); v && *v) o.refresh = truthy(v);
+	if (const char* v = std::getenv("OPENSHOP_FAIL"); v && *v) o.fail = truthy(v);
 	return o;
 }
 
 std::string DevOptions::describe() const {
 	return "screen=" + (screen.empty() ? std::string("(none)") : screen) + " mock=" + (mock ? "1" : "0") +
-	       " offline=" + (offline ? "1" : "0") + " refresh=" + (refresh ? "1" : "0");
+	       " offline=" + (offline ? "1" : "0") + " refresh=" + (refresh ? "1" : "0") + " fail=" + (fail ? "1" : "0");
 }

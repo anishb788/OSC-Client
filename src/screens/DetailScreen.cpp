@@ -6,6 +6,10 @@
 #include "ui/Widgets.h"
 
 namespace {
+// Future in-session refresh: this screen holds a `const AppEntry&` into App::catalog, valid because the catalog
+// is installed once and never replaced (see App::catalog). For a refreshable catalog, store the slug instead,
+// re-resolve it with `app.catalog.find(slug)` at the top of every draw() and pop() if it is gone (or hold a
+// shared_ptr<const Catalog> snapshot taken when the screen was created).
 class DetailScreen : public Screen {
 public:
 	explicit DetailScreen(const AppEntry& a) : app_(a) {}

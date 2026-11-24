@@ -24,8 +24,10 @@ void Ui::beginFrame(const Input& input, float frameDt) {
 
 	prevItems.swap(items);
 	items.clear();
-	activeLayer = 0;
-	for (auto& it : prevItems) activeLayer = std::max(activeLayer, it.layer);
+	// A dialog opening or closing changes the live layer. Drop the (now stale) focus, so a resting pointer
+	// re-focuses the item under it in item() this very frame. The D-pad default is cleared too: it belonged to
+	// the other layer, and the layer that is now live sets its own while drawing this frame.
+	if (modal != activeLayer) { activeLayer = modal; clearFocus(); }
 
 	if (!inputEnabled) return;
 
@@ -81,9 +83,9 @@ void Ui::beginFrame(const Input& input, float frameDt) {
 	lastFocus = focus;
 }
 
-void Ui::endFrame() {}
-
 bool Ui::item(Id id, Rect r) {
+	bool silent = silenceNext;
+	silenceNext = false;
 	items.push_back({id, r, layer});
 	bool interactive = inputEnabled && layer == activeLayer;
 
@@ -96,7 +98,7 @@ bool Ui::item(Id id, Rect r) {
 	if (!interactive || activationUsed || focus != id || !(in.pressed & BTN_CONFIRM)) return false;
 	if (usePointer && !(in.pointerValid && r.contains(in.px, in.py))) return false;
 	activationUsed = true;
-	audio::play(audio::Sfx::Select);
+	if (!silent) audio::play(audio::Sfx::Select);
 	return true;
 }
 

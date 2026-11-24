@@ -1,5 +1,6 @@
 #pragma once
 #include <functional>
+#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <string>
@@ -11,6 +12,7 @@
 #include "gfx/Gfx.h"
 #include "gfx/Text.h"
 #include "ui/Ui.h"
+#include "ui/Widgets.h"
 
 class App;
 
@@ -90,12 +92,24 @@ public:
 	void showDialog(Dialog d);
 	void quitPrompt(); // "Exit OpenShop?" confirmation
 
+	// The top bar every browsing screen draws instead of calling drawTopBar directly: fills in which action
+	// buttons are visible (none by default; `topbar=all` previews all three), draws, and dispatches a click.
+	// `hide` keeps a capsule off this screen (e.g. Downloads on the Downloads screen itself).
+	void topBar(Ui& ui, std::string_view title, std::string_view subtitle = {},
+	            std::initializer_list<TopBarAction> hide = {});
+	// Where the top-bar buttons lead. M3 replaces openDownloads(), M4 openSettings(); Increment 4b points
+	// refresh at App::refreshCatalog(). Until then each shows a "coming soon" message.
+	void openDownloads();
+	void refreshFromTopBar();
+	void openSettings();
+
 private:
 	void drawDialog();
 	// Closes the dialog without a button choice: a Progress dialog's onCancel is called; a Message dialog
 	// (including a finished Progress dialog showing its "done" message) is dropped without calling onChoose.
 	void dropDialog();
 	void openDevStartScreen();
+	void comingSoon(const char* what);
 
 	Catalog catalog_;
 	bool catalogInstalled = false;

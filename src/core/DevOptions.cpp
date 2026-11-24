@@ -41,6 +41,7 @@ void DevOptions::parseFile(const std::string& text, DevOptions& o) {
 		else if (key == "offline") o.offline = truthy(val);
 		else if (key == "refresh") o.refresh = truthy(val);
 		else if (key == "fail") o.fail = truthy(val);
+		else if (key == "topbar") o.topbarAll = val == "all";
 	}
 }
 
@@ -53,10 +54,12 @@ DevOptions DevOptions::load(const std::string& dataDir) {
 	if (const char* v = std::getenv("OPENSHOP_OFFLINE"); v && *v) o.offline = truthy(v);
 	if (const char* v = std::getenv("OPENSHOP_REFRESH"); v && *v) o.refresh = truthy(v);
 	if (const char* v = std::getenv("OPENSHOP_FAIL"); v && *v) o.fail = truthy(v);
+	if (const char* v = std::getenv("OPENSHOP_TOPBAR"); v && *v) o.topbarAll = std::string(v) == "all";
 	return o;
 }
 
 std::string DevOptions::describe() const {
 	return "screen=" + (screen.empty() ? std::string("(none)") : screen) + " mock=" + (mock ? "1" : "0") +
-	       " offline=" + (offline ? "1" : "0") + " refresh=" + (refresh ? "1" : "0") + " fail=" + (fail ? "1" : "0");
+	       " offline=" + (offline ? "1" : "0") + " refresh=" + (refresh ? "1" : "0") + " fail=" + (fail ? "1" : "0") +
+	       " topbar=" + (topbarAll ? "all" : "default");
 }

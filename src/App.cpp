@@ -146,6 +146,38 @@ void App::quitPrompt() {
 	showDialog(std::move(d));
 }
 
+void App::comingSoon(const char* what) {
+	Dialog d;
+	d.title = "Coming soon";
+	d.message = std::string(what) + " is not available yet.";
+	d.primaryIndex = 0;
+	showDialog(std::move(d));
+}
+
+void App::openDownloads() { comingSoon("Downloads"); }
+void App::refreshFromTopBar() { comingSoon("Refresh"); }
+void App::openSettings() { comingSoon("Settings"); }
+
+void App::topBar(Ui& ui, std::string_view title, std::string_view subtitle,
+                 std::initializer_list<TopBarAction> hide) {
+	TopBarButtons buttons;
+	if (opts.topbarAll) {
+		for (auto& b : buttons.b) b.visible = true;
+		// Fake state so the preview shows the active outline, progress strip and count badge.
+		buttons[TopBarAction::Downloads].active = true;
+		buttons[TopBarAction::Downloads].progress = 0.42f;
+		buttons[TopBarAction::Downloads].badge = Badge{"2", theme::accent};
+	}
+	for (TopBarAction a : hide) buttons[a].visible = false;
+	auto act = drawTopBar(ui, title, subtitle, &buttons);
+	if (!act) return;
+	switch (*act) {
+	case TopBarAction::Downloads: openDownloads(); break;
+	case TopBarAction::Refresh: refreshFromTopBar(); break;
+	case TopBarAction::Settings: openSettings(); break;
+	}
+}
+
 void App::run() {
 	Uint64 last = SDL_GetPerformanceCounter();
 	const double freq = (double)SDL_GetPerformanceFrequency();

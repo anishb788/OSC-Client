@@ -51,9 +51,16 @@ $(CORETEST): tests/core_test.cpp src/core/DevOptions.cpp src/core/DevOptions.h s
 	@mkdir -p $(dir $@)
 	$(CXX) $(TESTCXX) -o $@ tests/core_test.cpp src/core/DevOptions.cpp
 
-test: $(TESTBIN) $(CORETEST)
+TOPBARTEST := $(BUILD)/tests/topbar_test
+
+$(TOPBARTEST): tests/topbar_test.cpp src/ui/TopBarLayout.h
+	@mkdir -p $(dir $@)
+	$(CXX) $(TESTCXX) -o $@ tests/topbar_test.cpp
+
+test: $(TESTBIN) $(CORETEST) $(TOPBARTEST)
 	$(TESTBIN)
 	$(CORETEST)
+	$(TOPBARTEST)
 
 clean:
 	rm -rf $(BUILD)

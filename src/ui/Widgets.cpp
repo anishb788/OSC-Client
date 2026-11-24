@@ -3,6 +3,7 @@
 #include "catalog/Catalog.h"
 #include "gfx/Text.h"
 #include "gfx/Theme.h"
+#include "ui/TopBarLayout.h"
 
 void drawCard(Ui& ui, Rect r, float hov, float radius) {
 	Rect g = r.inset(-2.5f * hov);
@@ -12,7 +13,8 @@ void drawCard(Ui& ui, Rect r, float hov, float radius) {
 	ui.g.roundRectBorder(g, radius, bw, lerp(theme::border, theme::accent, hov), theme::card);
 }
 
-bool pillButton(Ui& ui, Id id, Rect r, std::string_view label, Pill style, const Icon* icon, int fontSize) {
+bool pillButton(Ui& ui, Id id, Rect r, std::string_view label, Pill style, std::optional<Icon> icon, int fontSize,
+                std::optional<Color> iconColor) {
 	bool clicked = ui.item(id, r);
 	float hov = ui.hover(id);
 	Rect g = r.inset(-2.0f * hov);
@@ -42,7 +44,7 @@ bool pillButton(Ui& ui, Id id, Rect r, std::string_view label, Pill style, const
 	float total = std::min(iconSize + gap + tw, g.w - 24);
 	float x = g.cx() - total / 2;
 	if (icon) {
-		ui.g.icon(*icon, {x, g.cy() - iconSize / 2, iconSize, iconSize}, fg);
+		ui.g.icon(*icon, {x, g.cy() - iconSize / 2, iconSize, iconSize}, iconColor.value_or(fg));
 		x += iconSize + gap;
 	}
 	ui.t.drawIn(Font::Bold, fontSize, label, {x, g.y, total - iconSize - gap + 1, g.h}, fg);
@@ -86,7 +88,7 @@ void drawAppIcon(Ui& ui, const AppEntry& app, Rect r) {
 	ui.t.drawIn(Font::Bold, size, app.name, r.inset(r.h * 0.18f, 0), theme::white, Align::Center);
 }
 
-float drawChip(Ui& ui, float x, float y, std::string_view label, Color c, const Icon* icon) {
+float drawChip(Ui& ui, float x, float y, std::string_view label, Color c, std::optional<Icon> icon) {
 	const int fs = 13;
 	float h = 22, iconW = icon ? 14 : 0, pad = 9;
 	float w = pad * 2 + iconW + (icon ? 5 : 0) + ui.t.width(Font::Bold, fs, label);
@@ -97,7 +99,43 @@ float drawChip(Ui& ui, float x, float y, std::string_view label, Color c, const 
 	return w;
 }
 
-void drawTopBar(Ui& ui, std::string_view title, std::string_view subtitle) {
+namespace {
+constexpr Icon kTopBarIcons[topbar::kCount] = {Icon::Download, Icon::Refresh, Icon::Gear};
+constexpr const char* kTopBarIds[topbar::kCount] = {"topbar:downloads", "topbar:refresh", "topbar:settings"};
+
+// One capsule of the top bar: the button itself is a pillButton (so the glossy restyle in Increment 4e reaches
+// it through pillButton), plus the capsule-only extras drawn here: active outline and progress strip. The badge
+// is drawn separately, after every capsule, so a neighbour's focus glow never covers it.
+bool topBarCapsule(Ui& ui, Id id, const topbar::Box& box, Icon icon, const TopBarButton& st) {
+	Rect r{box.x, box.y, box.w, box.h};
+	if (st.active) ui.g.fillRoundRect(r.inset(-2), r.h / 2 + 2, theme::accent); // peeks out around the pill's border
+	bool clicked = pillButton(ui, id, r, {}, Pill::Normal, icon, 17, theme::accentDark);
+
+	if (st.progress) {
+		Rect track{r.x + 10, r.bottom() - 5 - 4, r.w - 20, 4};
+		float p = std::clamp(*st.progress, 0.0f, 1.0f);
+		ui.g.fillRoundRect(track, 2, Color{215, 225, 233});
+		if (p > 0.01f) ui.g.fillRoundRect({track.x, track.y, std::max(4.0f, track.w * p), track.h}, 2, theme::accent);
+	}
+	return clicked;
+}
+
+void topBarBadge(Ui& ui, const topbar::Box& box, const Badge& badge) {
+	if (badge.text.empty()) return;
+	float w = std::max(20.0f, (float)ui.t.width(Font::Bold, 12, badge.text) + 12);
+	Rect b{box.x + box.w + 6 - w, box.y - 6, w, 20};
+	ui.g.roundRectBorder(b, 10, 2, theme::white, badge.colour);
+	ui.t.drawIn(Font::Bold, 12, badge.text, b, theme::white, Align::Center);
+}
+} // namespace
+
+bool anyTopBarFocused(const Ui& ui) {
+	for (const char* id : kTopBarIds) if (ui.focused(makeId(id))) return true;
+	return false;
+}
+
+std::optional<TopBarAction> drawTopBar(Ui& ui, std::string_view title, std::string_view subtitle,
+                                       const TopBarButtons* buttons) {
 	float W = (float)ui.g.width();
 	const float h = theme::topBarH;
 	ui.g.gradientV({0, h, W, 10}, Color{0, 40, 80, 26}, Color{0, 40, 80, 0});
@@ -105,13 +143,30 @@ void drawTopBar(Ui& ui, std::string_view title, std::string_view subtitle) {
 	ui.g.fillRect({0, h - 3, W, 3}, theme::accent);
 	ui.g.fillRect({0, h - 3, W, 1}, Color{140, 220, 248});
 
+	std::array<bool, topbar::kCount> vis{};
+	if (buttons) for (int i = 0; i < topbar::kCount; i++) vis[i] = buttons->b[i].visible;
+	topbar::Layout lay = topbar::layout(W, theme::margin, vis);
+
 	float x = theme::margin;
-	std::string t = ui.t.ellipsize(Font::Bold, 24, title, (int)(W * 0.62f));
+	int titleW = ui.t.width(Font::Bold, 24, title);
+	int subW = subtitle.empty() ? 0 : ui.t.width(Font::Medium, 15, subtitle);
+	topbar::Fit fit = topbar::fit(W, theme::margin, lay.titleRight, (float)titleW, (float)subW);
+	std::string t = ui.t.ellipsize(Font::Bold, 24, title, (int)fit.titleMaxW);
 	x += ui.t.draw(Font::Bold, 24, t, x, h / 2 - ui.t.lineHeight(Font::Bold, 24) / 2.0f - 1, theme::text);
-	if (!subtitle.empty()) {
-		x += 14;
-		ui.t.drawIn(Font::Medium, 15, subtitle, {x, 0, W - x - theme::margin, h - 2}, theme::textMuted);
+	if (fit.showSubtitle) {
+		x += topbar::kTitleGap;
+		ui.t.drawIn(Font::Medium, 15, subtitle, {x, 0, lay.titleRight - x, h - 2}, theme::textMuted);
 	}
+
+	std::optional<TopBarAction> activated;
+	for (int i = 0; i < topbar::kCount; i++) {
+		if (!lay.visible[i]) continue;
+		if (topBarCapsule(ui, makeId(kTopBarIds[i]), lay.rect[i], kTopBarIcons[i], buttons->b[i]))
+			activated = (TopBarAction)i;
+	}
+	for (int i = 0; i < topbar::kCount; i++)
+		if (lay.visible[i] && buttons->b[i].badge) topBarBadge(ui, lay.rect[i], *buttons->b[i].badge);
+	return activated;
 }
 
 void drawBottomBar(Ui& ui) {
@@ -125,8 +180,7 @@ void drawBottomBar(Ui& ui) {
 
 bool backButton(Ui& ui, std::string_view label) {
 	float H = (float)ui.g.height();
-	static const Icon chevron = Icon::ChevronLeft;
 	Rect r{theme::margin, H - theme::bottomBarH + 12, 132, 40};
-	bool clicked = pillButton(ui, makeId("bottom:back"), r, label, Pill::Normal, &chevron, 17);
+	bool clicked = pillButton(ui, makeId("bottom:back"), r, label, Pill::Normal, Icon::ChevronLeft, 17);
 	return clicked || ui.pressed(BTN_BACK);
 }

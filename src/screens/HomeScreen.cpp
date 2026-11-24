@@ -12,7 +12,7 @@ public:
 		const float m = theme::margin;
 		float top = theme::topBarH + 18, bottom = H - theme::bottomBarH - 16;
 
-		drawTopBar(ui, "OpenShop", "Open Shop Channel client");
+		app.topBar(ui, "OpenShop", "Open Shop Channel client");
 
 		// Left column: featured app + quick actions.
 		float lw = std::round(W * 0.40f);
@@ -32,16 +32,17 @@ public:
 			ui.setDefaultFocus(id);
 		}
 
-		static const Icon search = Icon::Search;
 		float y = feat.bottom() + 16;
-		if (pillButton(ui, makeId("home:search"), {m, y, lw, 52}, "Search apps", Pill::Primary, &search, 19))
+		// Without a featured app, Search is the D-pad's starting point (never a top-bar capsule).
+		if (!app.catalog.featured()) ui.setDefaultFocus(makeId("home:search"));
+		if (pillButton(ui, makeId("home:search"), {m, y, lw, 52}, "Search apps", Pill::Primary, Icon::Search, 19))
 			app.push(makeSearchScreen());
 		y += 52 + 12;
 		float half = (lw - 12) / 2;
 		float bh = std::min(48.0f, bottom - y);
-		if (pillButton(ui, makeId("home:popular"), {m, y, half, bh}, "Popular", Pill::Normal, nullptr, 17))
+		if (pillButton(ui, makeId("home:popular"), {m, y, half, bh}, "Popular", Pill::Normal, std::nullopt, 17))
 			app.push(makeListScreen("Popular", app.catalog.inCategory(""), kAllSorts, SortMode::Popular));
-		if (pillButton(ui, makeId("home:newest"), {m + half + 12, y, half, bh}, "Newest", Pill::Normal, nullptr, 17))
+		if (pillButton(ui, makeId("home:newest"), {m + half + 12, y, half, bh}, "Newest", Pill::Normal, std::nullopt, 17))
 			app.push(makeListScreen("Newest", app.catalog.inCategory(""), kAllSorts, SortMode::Newest));
 
 		// Right: category tiles (2 x 3).
@@ -65,15 +66,14 @@ public:
 		float by = H - theme::bottomBarH + 12;
 		ui.silenceNextActivation(); // quitPrompt() plays the HOME chime instead of the click
 		bool exitClicked = pillButton(ui, makeId("home:exit"), {m, by, 120, 40}, platform::exitLabel(),
-		                              Pill::Normal, nullptr, 17);
+		                              Pill::Normal, std::nullopt, 17);
 		if (exitClicked || ui.pressed(BTN_BACK)) app.quitPrompt();
 		ui.t.drawIn(Font::Medium, 14, "Catalog provided by the Open Shop Channel",
 		            {m + 136, by, W - 2 * m - 136 - 150, 40}, theme::textMuted, Align::Center);
 		if (audio::hasMusic()) {
-			static const Icon note = Icon::Note;
 			bool on = audio::musicEnabled();
 			if (pillButton(ui, makeId("home:music"), {W - m - 134, by, 134, 40}, on ? "Music on" : "Music off",
-			               on ? Pill::Selected : Pill::Normal, &note, 15))
+			               on ? Pill::Selected : Pill::Normal, Icon::Note, 15))
 				audio::toggleMusic();
 		}
 	}

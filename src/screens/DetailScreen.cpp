@@ -20,7 +20,7 @@ public:
 		const AppEntry& a = app_;
 		float top = theme::topBarH + 16, bottom = H - theme::bottomBarH - 14;
 
-		drawTopBar(ui, a.name, app.catalog.categoryDisplay(a.category));
+		app.topBar(ui, a.name, app.catalog.categoryDisplay(a.category));
 
 		// Left: icon + download.
 		float lw = std::round(W * 0.34f);
@@ -29,9 +29,8 @@ public:
 		float iw = std::min(lw - 28, 224.0f);
 		drawAppIcon(ui, a, {iconCard.cx() - iw / 2, iconCard.cy() - iw * 48 / 256, iw, iw * 48 / 128});
 
-		static const Icon dl = Icon::Download;
 		Id dlId = makeId("detail:download");
-		if (pillButton(ui, dlId, {m, iconCard.bottom() + 16, lw, 54}, "Download", Pill::Primary, &dl, 20))
+		if (pillButton(ui, dlId, {m, iconCard.bottom() + 16, lw, 54}, "Download", Pill::Primary, Icon::Download, 20))
 			startDownload(app);
 		ui.setDefaultFocus(dlId);
 		ui.t.drawIn(Font::Medium, 14, formatSize(a.archiveSize) + " download",
@@ -39,8 +38,7 @@ public:
 
 		// Flags.
 		float fy = iconCard.bottom() + 106;
-		static const Icon warn = Icon::Warning;
-		if (a.hasFlag("WRITES_TO_NAND")) { drawChip(ui, m, fy, "Modifies system memory", theme::warn, &warn); fy += 30; }
+		if (a.hasFlag("WRITES_TO_NAND")) { drawChip(ui, m, fy, "Modifies system memory", theme::warn, Icon::Warning); fy += 30; }
 		if (a.hasFlag("DEPRECATED")) { drawChip(ui, m, fy, "Deprecated", theme::muted); fy += 30; }
 		if (a.hasFlag("AI_ASSISTED")) { drawChip(ui, m, fy, "AI-assisted", theme::accentDark); fy += 30; }
 

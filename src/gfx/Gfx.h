@@ -5,7 +5,7 @@
 
 #include "core/Types.h"
 
-enum class Icon { ChevronLeft, ChevronRight, ChevronUp, ChevronDown, Search, Download, Warning, Note, Close };
+enum class Icon { ChevronLeft, ChevronRight, ChevronUp, ChevronDown, Search, Download, Warning, Note, Close, Refresh, Gear };
 
 class Gfx {
 public:

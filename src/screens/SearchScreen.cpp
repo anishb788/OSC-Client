@@ -22,15 +22,16 @@ public:
 		float W = (float)ui.g.width(), H = (float)ui.g.height();
 		const float m = 48;
 
-		// Physical keyboard input. Enter submits instead of clicking the focused key.
-		bool enterSubmits = ui.onTop() && ui.in.enterKey;
+		// Physical keyboard input. Enter submits instead of clicking the focused key, except on a focused top-bar
+		// capsule, where Enter presses the capsule like A does.
+		bool enterSubmits = ui.onTop() && ui.in.enterKey && !anyTopBarFocused(ui);
 		if (enterSubmits) ui.consumeConfirm();
 		if (ui.onTop()) {
 			for (char c : ui.in.text) if (query.size() < kMaxQuery && (unsigned char)c >= 0x20) append(std::string(1, c));
 			for (int i = 0; i < ui.in.backspaces; i++) erase();
 		}
 
-		drawTopBar(ui, "Search", "Find apps by name, author or description");
+		app.topBar(ui, "Search", "Find apps by name, author or description");
 
 		// Query field.
 		Rect field{m, theme::topBarH + 16, W - 2 * m, 48};
@@ -77,8 +78,7 @@ public:
 		bx += wide + gap;
 		if (key(ui, makeId("key:clear"), {bx, by, wide, kh}, "Clear")) { query.clear(); update(app); }
 		bx += wide + gap;
-		static const Icon search = Icon::Search;
-		bool submit = pillButton(ui, makeId("key:go"), {bx, by, wide, kh}, "Search", Pill::Primary, &search, 16);
+		bool submit = pillButton(ui, makeId("key:go"), {bx, by, wide, kh}, "Search", Pill::Primary, Icon::Search, 16);
 		if (enterSubmits) submit = true;
 
 		if (dirty) update(app);

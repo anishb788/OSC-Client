@@ -35,16 +35,18 @@ public:
 		page = std::clamp(page, 0, pages - 1);
 
 		std::string sub = formatCount((uint32_t)apps.size()) + (apps.size() == 1 ? " app" : " apps");
-		drawTopBar(ui, title, sub);
+		app.topBar(ui, title, sub);
 
 		// Sort pills.
 		float y = theme::topBarH + 14;
 		float px = side;
+		// An empty list has no row 0; start the D-pad on the first sort pill (never on a top-bar capsule).
+		if (apps.empty() && !sorts.empty()) ui.setDefaultFocus(makeId("list:sort", 0u));
 		for (size_t i = 0; i < sorts.size(); i++) {
 			const char* label = sortLabel(sorts[i]);
 			float w = (float)ui.t.width(Font::Bold, 15, label) + 40;
 			if (pillButton(ui, makeId("list:sort", (uint32_t)i), {px, y, w, 32}, label,
-			               sorts[i] == sort ? Pill::Selected : Pill::Normal, nullptr, 15) &&
+			               sorts[i] == sort ? Pill::Selected : Pill::Normal, std::nullopt, 15) &&
 			    sorts[i] != sort) {
 				sort = sorts[i];
 				resort();
@@ -127,8 +129,7 @@ private:
 		std::string sub = a.version.empty() ? std::string() : (a.version[0] == 'v' ? a.version : "v" + a.version);
 		ui.t.drawIn(Font::Medium, 13, sub, {rx - rightW, g.y + 28, rightW, 20}, theme::textMuted, Align::Right);
 		if (a.hasFlag("WRITES_TO_NAND")) {
-			static const Icon warn = Icon::Warning;
-			ui.g.icon(warn, {rx - rightW - 4, g.y + 8, 16, 16}, theme::warn);
+			ui.g.icon(Icon::Warning, {rx - rightW - 4, g.y + 8, 16, 16}, theme::warn);
 		}
 	}
 

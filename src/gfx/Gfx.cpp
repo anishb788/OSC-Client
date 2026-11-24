@@ -276,6 +276,42 @@ SDL_Texture* Gfx::iconTexture(Icon kind, int size) {
 		f = [=](float x, float y) { return std::min(segDist(x, y, a, b), segDist(x, y, c, d)) - t; };
 		break;
 	}
+	case Icon::Refresh: {
+		// Open circular arrow: a clockwise arc with a gap at the upper right, ending in an arrowhead.
+		V2 c = P(0.5f, 0.5f);
+		float R = 0.32f * s;
+		const float kPi = 3.14159265f;
+		float gapA = -75.0f * kPi / 180, gapB = -15.0f * kPi / 180; // screen angles, y down, so clockwise = increasing
+		V2 e{c.x + R * std::cos(gapA), c.y + R * std::sin(gapA)};
+		V2 tg{-std::sin(gapA), std::cos(gapA)}, nr{std::cos(gapA), std::sin(gapA)};
+		float hw = 0.2f * s, hl = 0.26f * s;
+		V2 tri[3] = {{e.x + tg.x * hl, e.y + tg.y * hl}, {e.x + nr.x * hw, e.y + nr.y * hw}, {e.x - nr.x * hw, e.y - nr.y * hw}};
+		f = [=](float x, float y) {
+			float a = std::atan2(y - c.y, x - c.x);
+			float arc = std::fabs(std::hypot(x - c.x, y - c.y) - R) - t * 1.1f;
+			if (a > gapA - 0.02f && a < gapB) {
+				// Inside the gap: the arc ends are round caps.
+				V2 s0{c.x + R * std::cos(gapB), c.y + R * std::sin(gapB)};
+				arc = std::min(std::hypot(x - s0.x, y - s0.y), std::hypot(x - e.x, y - e.y)) - t * 1.1f;
+			}
+			return std::min(arc, polyDist(x, y, tri, 3));
+		};
+		break;
+	}
+	case Icon::Gear: {
+		// Toothed ring with a centre hole: 6 chunky, square-ish teeth (steep flanks), one pointing straight up. Wide
+		// teeth and a big hole keep it reading as a gear at ~20 px and through the Wii's 16:9 squeeze.
+		V2 c = P(0.5f, 0.5f);
+		float body = 0.33f * s, tooth = 0.46f * s, hole = 0.16f * s;
+		f = [=](float x, float y) {
+			float dx = x - c.x, dy = y - c.y, d = std::hypot(dx, dy);
+			float a = std::atan2(dy, dx) + 1.5707963f; // 0 at "up" (screen y grows downward)
+			float k = std::clamp((std::cos(6.0f * a) + 0.2f) * 8.0f, 0.0f, 1.0f);
+			float outer = d - (body + (tooth - body) * k);
+			return std::max(outer, hole - d);
+		};
+		break;
+	}
 	}
 	SDL_Texture* tex = maskTexture(size, size, f);
 	icons[key] = tex;

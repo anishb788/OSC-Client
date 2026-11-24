@@ -33,8 +33,18 @@ static void testDevOptions() {
 	CHECK(parse("screen=home\nscreen=dialog\n").screen == "dialog");
 	CHECK(parse("").screen.empty());
 
+	// topbar=all previews the top-bar buttons; anything else leaves them to their features.
+	CHECK(!parse("").topbarAll);
+	CHECK(parse("topbar=all\n").topbarAll);
+	CHECK(parse(" topbar = all \r\n").topbarAll);
+	CHECK(!parse("topbar=none\n").topbarAll);
+	CHECK(!parse("topbar=1\n").topbarAll);
+	CHECK(!parse("topbar=\n").topbarAll);
+	CHECK(!parse("topbar=all\ntopbar=\n").topbarAll);
+	CHECK(parse("topbar=all\nscreen=list\n").screen == "list");
+
 	o = parse("screen=search\nfail=1");
-	CHECK(o.describe() == "screen=search mock=0 offline=0 refresh=0 fail=1");
+	CHECK(o.describe() == "screen=search mock=0 offline=0 refresh=0 fail=1 topbar=default");
 }
 
 static void testInstallGuard() {

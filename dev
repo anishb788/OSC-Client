@@ -14,8 +14,9 @@
 #     --offline                                   use the cache only, no network
 #     --refresh                                   ignore the cache TTL
 #     --fail                                      make the first catalog load fail (error screen; Retry works)
+#     --topbar all                                preview every top-bar action button (fake progress and badge)
 #   On Wii they are written to <app dir>/devstart as key=value lines (env vars don't reach
-#   Dolphin); on PC they are exported as OPENSHOP_START / _MOCK / _OFFLINE / _REFRESH / _FAIL.
+#   Dolphin); on PC they are exported as OPENSHOP_START / _MOCK / _OFFLINE / _REFRESH / _FAIL / _TOPBAR.
 #   Dolphin's virtual SD card is synced with ./sdcard (put bgm.mp3 in sdcard/apps/OpenShop/).
 #   ./sdcard is a symlink to .dolphin/sdcard; .dolphin/ is the only repo dir Dolphin may write to.
 #   ./dev package             build dist/OpenShop.zip for the Homebrew Channel (SD:/apps/OpenShop)
@@ -206,6 +207,7 @@ devstart_text() {
 	(( OPT_OFFLINE )) && echo "offline=1"
 	(( OPT_REFRESH )) && echo "refresh=1"
 	(( OPT_FAIL )) && echo "fail=1"
+	[[ -n "$OPT_TOPBAR" ]] && echo "topbar=$OPT_TOPBAR"
 	return 0
 }
 
@@ -270,7 +272,7 @@ launch_pc() {
 	prepare_sd
 	info "Launching Linux build (Ctrl+C or close window to stop)"
 	OPENSHOP_DATA="$APP_DIR" OPENSHOP_START="$START_SCREEN" OPENSHOP_MOCK="$OPT_MOCK" \
-		OPENSHOP_OFFLINE="$OPT_OFFLINE" OPENSHOP_REFRESH="$OPT_REFRESH" OPENSHOP_FAIL="$OPT_FAIL" ./build-pc/openshop &
+		OPENSHOP_OFFLINE="$OPT_OFFLINE" OPENSHOP_REFRESH="$OPT_REFRESH" OPENSHOP_FAIL="$OPT_FAIL" OPENSHOP_TOPBAR="$OPT_TOPBAR" ./build-pc/openshop &
 	echo $! > build-pc/.pid
 }
 
@@ -328,7 +330,7 @@ headers() {
 usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; }
 
 cmd="${1:-}"; shift || true
-START_SCREEN=""; OPT_MOCK=0; OPT_OFFLINE=0; OPT_REFRESH=0; OPT_FAIL=0
+START_SCREEN=""; OPT_MOCK=0; OPT_OFFLINE=0; OPT_REFRESH=0; OPT_FAIL=0; OPT_TOPBAR=""
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 		--screen)
@@ -342,6 +344,9 @@ while [[ $# -gt 0 ]]; do
 		--offline) OPT_OFFLINE=1; shift ;;
 		--refresh) OPT_REFRESH=1; shift ;;
 		--fail)    OPT_FAIL=1; shift ;;
+		--topbar|--topbar=*)
+			if [[ "$1" == --topbar=* ]]; then OPT_TOPBAR="${1#--topbar=}"; shift; else OPT_TOPBAR="${2:-}"; shift $(( $# > 1 ? 2 : 1 )); fi
+			[[ "$OPT_TOPBAR" == all ]] || { err "--topbar: only 'all' is supported"; exit 1; } ;;
 		*) break ;;
 	esac
 done

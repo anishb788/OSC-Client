@@ -27,7 +27,7 @@ the real catalog. Downloading and installing apps isn't implemented yet.
 |---|---|---|
 | Point + A | Mouse + left click | Select |
 | D-pad | Arrow keys | Move focus |
-| B | Esc / right click | Back (on Search: delete a letter) |
+| B | Esc / right click | Back |
 | + / − | PageDown / PageUp | Next / previous page, scroll the description |
 | HOME | F1 | Exit menu |
 | 1 | F2 | Toggle music |

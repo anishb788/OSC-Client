@@ -1,3 +1,4 @@
+#include <cctype>
 #include <cmath>
 
 #include "App.h"
@@ -51,7 +52,8 @@ public:
 		for (int row = 0; row < 4; row++) {
 			for (int col = 0; col < 10; col++) {
 				char c = kRows[row][col];
-				std::string label(1, c);
+				// Ids use the lowercase char so focus stays put when Shift flips the labels.
+				std::string label(1, shift ? (char)std::toupper((unsigned char)c) : c);
 				Rect r{kx + col * (kw + gap), ky + row * (kh + gap), kw, kh};
 				Id id = makeId("key", (uint32_t)c);
 				if (key(ui, id, r, label)) append(label);
@@ -59,19 +61,19 @@ public:
 			}
 		}
 		float by = ky + 4 * (kh + gap) + 4;
-		float total = 10 * kw + 9 * gap, wide = 2 * kw + gap;
-		float spaceW = total - 2 * wide - (2 * wide + gap) - 3 * gap;
+		// Bottom row: five keys, each two letter-keys wide.
+		float wide = 2 * kw + gap;
 		float bx = kx;
-		if (key(ui, makeId("key:space"), {bx, by, spaceW, kh}, "Space")) append(" ");
-		bx += spaceW + gap;
+		if (key(ui, makeId("key:shift"), {bx, by, wide, kh}, "Shift", shift)) shift = !shift;
+		bx += wide + gap;
+		if (key(ui, makeId("key:space"), {bx, by, wide, kh}, "Space")) append(" ");
+		bx += wide + gap;
 		if (key(ui, makeId("key:del"), {bx, by, wide, kh}, "Delete")) erase();
 		bx += wide + gap;
 		if (key(ui, makeId("key:clear"), {bx, by, wide, kh}, "Clear")) { query.clear(); update(app); }
 		bx += wide + gap;
 		static const Icon search = Icon::Search;
-		Rect go{bx, by, total - (bx - kx), kh};
-		bool submit = pillButton(ui, makeId("key:go"), go, results.empty() ? "Search" : "Show results", Pill::Primary,
-		                         &search, 16);
+		bool submit = pillButton(ui, makeId("key:go"), {bx, by, wide, kh}, "Search", Pill::Primary, &search, 16);
 		if (enterSubmits) submit = true;
 
 		if (dirty) update(app);
@@ -85,14 +87,8 @@ public:
 		}
 
 		drawBottomBar(ui);
-		// B deletes while typing; Back when empty.
-		bool back = pillButton(ui, makeId("bottom:back"), {theme::margin, H - theme::bottomBarH + 12, 132, 40}, "Back",
-		                       Pill::Normal, &kChevron, 17);
-		if (ui.pressed(BTN_BACK)) {
-			if (query.empty()) back = true; else erase();
-		}
-		if (back) app.pop();
-		ui.t.drawIn(Font::Medium, 14, "B deletes a letter  ·  + searches", {W - theme::margin - 300, H - theme::bottomBarH + 12, 300, 40},
+		if (backButton(ui)) app.pop();
+		ui.t.drawIn(Font::Medium, 14, "+ searches", {W - theme::margin - 300, H - theme::bottomBarH + 12, 300, 40},
 		            theme::textMuted, Align::Right);
 		if (ui.pressed(BTN_PLUS) && !query.empty() && !results.empty())
 			app.push(makeListScreen("“" + query + "”", results, {SortMode::Relevance, SortMode::Popular, SortMode::Newest},
@@ -100,16 +96,16 @@ public:
 	}
 
 private:
-	static constexpr Icon kChevron = Icon::ChevronLeft;
-
-	bool key(Ui& ui, Id id, Rect r, const std::string& label) {
+	// `on` draws the key latched (used by Shift).
+	bool key(Ui& ui, Id id, Rect r, const std::string& label, bool on = false) {
 		bool clicked = ui.item(id, r);
 		float hov = ui.hover(id);
 		Rect g = r.inset(-2 * hov);
 		ui.g.softShadow(g, 10, 0.6f);
-		ui.g.roundRectBorder(g, 10, 1.5f + hov * 1.5f, lerp(theme::border, theme::accent, hov),
-		                     lerp(theme::card, theme::accentSoft, hov));
-		ui.t.drawIn(Font::Bold, label.size() == 1 ? 20 : 15, label, g, lerp(theme::text, theme::accentDark, hov), Align::Center);
+		Color fill = on ? theme::accent : lerp(theme::card, theme::accentSoft, hov);
+		Color fg = on ? theme::white : lerp(theme::text, theme::accentDark, hov);
+		ui.g.roundRectBorder(g, 10, 1.5f + hov * 1.5f, lerp(on ? theme::accentDark : theme::border, theme::accent, hov), fill);
+		ui.t.drawIn(Font::Bold, label.size() == 1 ? 20 : 15, label, g, fg, Align::Center);
 		return clicked;
 	}
 
@@ -137,6 +133,7 @@ private:
 	std::string query;
 	std::vector<const AppEntry*> results;
 	bool dirty = false;
+	bool shift = false; // caps toggle for the on-screen letter keys
 };
 } // namespace
 

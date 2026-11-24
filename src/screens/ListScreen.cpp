@@ -47,7 +47,7 @@ public:
 			const char* label = sortLabel(sorts[i]);
 			float w = (float)ui.t.width(Font::Bold, 15, label) + 40;
 			if (pillButton(ui, makeId("list:sort", (uint32_t)i), {px, y, w, 32}, label,
-			               sorts[i] == sort ? Pill::Selected : Pill::Normal, std::nullopt, 15) &&
+			               {.style = sorts[i] == sort ? Pill::Selected : Pill::Normal, .fontSize = 15}) &&
 			    sorts[i] != sort) {
 				sort = sorts[i];
 				resort();
@@ -83,8 +83,12 @@ public:
 		// Paging: arrows, +/-, Left/Right past the edge, wheel, Down past the last row.
 		float mid = (listTop + listBottom) / 2;
 		int want = page;
-		if (page > 0 && arrowButton(ui, makeId("list:prev"), side / 2 + 2, mid, Icon::ChevronLeft, 19)) want--;
-		if (page < pages - 1 && arrowButton(ui, makeId("list:next"), W - side / 2 - 2, mid, Icon::ChevronRight, 19)) want++;
+		// Vertical capsules 40x60 in the side gutters (the old circles were 38 across): clear of the rows at x = side.
+		const float aw = 40, ah = 60;
+		if (page > 0 && arrowButton(ui, makeId("list:prev"), {side / 2 + 2 - aw / 2, mid - ah / 2, aw, ah}, Icon::ChevronLeft)) want--;
+		if (page < pages - 1 &&
+		    arrowButton(ui, makeId("list:next"), {W - side / 2 - 2 - aw / 2, mid - ah / 2, aw, ah}, Icon::ChevronRight))
+			want++;
 		if (ui.pressed(BTN_MINUS) || (ui.unhandledNav() & BTN_LEFT) || ui.wheel() > 0) want--;
 		if (ui.pressed(BTN_PLUS) || (ui.unhandledNav() & BTN_RIGHT) || ui.wheel() < 0) want++;
 		if ((ui.unhandledNav() & BTN_DOWN) && page < pages - 1) {

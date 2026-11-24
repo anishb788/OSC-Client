@@ -17,7 +17,9 @@ include $(DEVKITPPC)/wii_rules
 #---------------------------------------------------------------------------------
 TARGET		:=	OpenShop
 BUILD		:=	build
-SOURCES		:=	src src/core src/gfx src/ui src/screens src/catalog src/platform src/audio src/net
+# Every directory under src/, found at make time, so a new source folder can't be silently left out of the Wii build.
+# Objects land flattened in build/ by file name, so two .cpp files must never share a basename.
+SOURCES		:=	$(shell find src -type d)
 DATA		:=
 INCLUDES	:=	src
 

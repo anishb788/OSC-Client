@@ -11,16 +11,30 @@
 
 struct AppEntry;
 
-enum class Pill { Normal, Primary, Selected };
+// Gloss presets in Theme.h. Destructive (red) is for confirming a deletion (M3).
+enum class Pill { Normal, Primary, Selected, Destructive };
 
 // White card with soft shadow; hov (0..1) grows it slightly and adds the blue focus ring.
 void drawCard(Ui& ui, Rect r, float hov, float radius = 14);
 
-// iconColor overrides the icon's colour (it defaults to the label colour).
-bool pillButton(Ui& ui, Id id, Rect r, std::string_view label, Pill style = Pill::Normal,
-                std::optional<Icon> icon = std::nullopt, int fontSize = 18,
-                std::optional<Color> iconColor = std::nullopt);
-bool arrowButton(Ui& ui, Id id, float cx, float cy, Icon dir, float radius = 20);
+// Everything about a pill besides its id, rect and label, as designated initialisers:
+//   pillButton(ui, id, r, "Search", {.style = Pill::Primary, .icon = Icon::Search, .fontSize = 16})
+struct PillSpec {
+	Pill style = Pill::Normal;
+	std::optional<Icon> icon = std::nullopt;
+	int fontSize = 18;
+	std::optional<Color> iconColor = std::nullopt; // defaults to the label colour
+	bool leftAlign = false;     // icon and label start at padLeft instead of being centred
+	float padLeft = 18;
+	float contentDy = 0;        // shifts the icon and label vertically
+	float radius = -1;          // corner radius; < 0 = a full capsule (keyboard keys use a rounded rectangle)
+	std::string_view badge = {}; // right-aligned orange badge ("2 updates"); drawn only when not empty
+};
+
+bool pillButton(Ui& ui, Id id, Rect r, std::string_view label, const PillSpec& spec = {});
+// Paging / scrolling arrow: a capsule filling `r` (radius = the shorter side / 2) with the chevron centred in it.
+// iconFontSize sizes the chevron (about 1.15x). Use rects of at least 36 px on the short side for a pointer target.
+bool arrowButton(Ui& ui, Id id, Rect r, Icon dir, int iconFontSize = 18);
 
 // Placeholder app icon (real 128x48 PNG icons arrive with the live catalog).
 void drawAppIcon(Ui& ui, const AppEntry& app, Rect r);
@@ -61,3 +75,5 @@ void drawBottomBar(Ui& ui);
 bool backButton(Ui& ui, std::string_view label = "Back");
 
 Color categoryColor(std::string_view category);
+// Blue pictogram for a category on Home tiles (the grid for "" and for unknown categories).
+Icon categoryIcon(std::string_view category);

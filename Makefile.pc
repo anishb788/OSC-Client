@@ -57,10 +57,25 @@ $(TOPBARTEST): tests/topbar_test.cpp src/ui/TopBarLayout.h
 	@mkdir -p $(dir $@)
 	$(CXX) $(TESTCXX) -o $@ tests/topbar_test.cpp
 
-test: $(TESTBIN) $(CORETEST) $(TOPBARTEST)
+LAYOUTTEST := $(BUILD)/tests/layout_test
+
+$(LAYOUTTEST): tests/layout_test.cpp src/ui/HomeLayout.h
+	@mkdir -p $(dir $@)
+	$(CXX) $(TESTCXX) -o $@ tests/layout_test.cpp
+
+# The one test that needs SDL: draws the button helpers into a software renderer (no window, no display).
+GFXTEST := $(BUILD)/tests/gfx_test
+
+$(GFXTEST): tests/gfx_test.cpp src/gfx/Gfx.cpp src/gfx/Gfx.h src/gfx/Theme.h src/core/Types.h
+	@mkdir -p $(dir $@)
+	$(CXX) $(TESTCXX) $(shell pkg-config --cflags sdl2) -o $@ tests/gfx_test.cpp src/gfx/Gfx.cpp $(shell pkg-config --libs sdl2) -lm
+
+test: $(TESTBIN) $(CORETEST) $(TOPBARTEST) $(LAYOUTTEST) $(GFXTEST)
 	$(TESTBIN)
 	$(CORETEST)
 	$(TOPBARTEST)
+	$(LAYOUTTEST)
+	$(GFXTEST)
 
 clean:
 	rm -rf $(BUILD)

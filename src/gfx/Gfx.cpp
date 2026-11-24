@@ -28,6 +28,12 @@ float polyDist(float px, float py, const V2* v, int n) {
 	return s * d;
 }
 
+// Signed distance to a rounded box (centre, half sizes, corner radius), negative inside.
+float boxDist(float px, float py, float cx, float cy, float hx, float hy, float r) {
+	float qx = std::fabs(px - cx) - hx + r, qy = std::fabs(py - cy) - hy + r;
+	return std::hypot(std::max(qx, 0.0f), std::max(qy, 0.0f)) + std::min(std::max(qx, qy), 0.0f) - r;
+}
+
 // Arrow pointer, tip at (3,3) in a 30x38 box.
 constexpr V2 kCursor[] = {{4, 4}, {4, 29}, {10.5f, 23.5f}, {15, 33}, {20.5f, 30.5f}, {16, 21.5f}, {24.5f, 21.5f}};
 constexpr int kCursorW = 30, kCursorH = 38;
@@ -138,6 +144,7 @@ SDL_Texture* Gfx::maskTexture(int w, int h, const std::function<float(float, flo
 		}
 	}
 	SDL_Texture* t = SDL_CreateTextureFromSurface(r, s);
+	masks++;
 	SDL_FreeSurface(s);
 	if (t) SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
 	return t;
@@ -154,6 +161,10 @@ SDL_Texture* Gfx::circleTexture(int radius) {
 	return t;
 }
 
+void Gfx::prewarmCircles(int maxRadius) {
+	for (int i = 1; i <= maxRadius; i++) circleTexture(i);
+}
+
 void Gfx::drawTexture(SDL_Texture* tex, Rect dst, Color tint, const SDL_Rect* src) {
 	if (!tex) return;
 	SDL_SetTextureColorMod(tex, tint.r, tint.g, tint.b);
@@ -162,16 +173,33 @@ void Gfx::drawTexture(SDL_Texture* tex, Rect dst, Color tint, const SDL_Rect* sr
 	SDL_RenderCopyF(r, tex, src, &d);
 }
 
+// Rounded-rect geometry in output pixels, shared by fillRoundRect and gradientRoundRect so a body drawn over an outline
+// rounds exactly like the outline does: edges snapped with lround, the radius clamped to half the size and rounded
+// to whole pixels (horizontally after the squeeze).
+Gfx::Snapped Gfx::snap(Rect rc, float radius) const {
+	Snapped g;
+	g.x0 = (int)std::lround(rc.x * sx);
+	g.x1 = (int)std::lround(rc.right() * sx);
+	g.y0 = (int)std::lround(rc.y);
+	g.y1 = (int)std::lround(rc.bottom());
+	g.rad = (int)std::lround(std::max(0.0f, std::min({radius, rc.w / 2.0f, rc.h / 2.0f})));
+	g.rx = std::min((int)std::lround(g.rad * sx), (g.x1 - g.x0) / 2);
+	g.ry = std::min(g.rad, (g.y1 - g.y0) / 2);
+	return g;
+}
+
 void Gfx::fillRoundRect(Rect rc, float radius, Color c) {
 	if (rc.w <= 0 || rc.h <= 0) return;
-	int rad = (int)std::lround(std::min({radius, rc.w / 2.0f, rc.h / 2.0f}));
-	if (rad <= 0) { fillRect(rc, c); return; }
-
 	// Work in output pixels, snapped, so the pieces meet without seams.
-	int x0 = (int)std::lround(rc.x * sx), x1 = (int)std::lround(rc.right() * sx);
-	int y0 = (int)std::lround(rc.y), y1 = (int)std::lround(rc.bottom());
-	int rx = std::min((int)std::lround(rad * sx), (x1 - x0) / 2), ry = std::min(rad, (y1 - y0) / 2);
-	if (rx <= 0 || ry <= 0) { fillRect(rc, c); return; }
+	const Snapped g = snap(rc, radius);
+	const int x0 = g.x0, x1 = g.x1, y0 = g.y0, y1 = g.y1, rx = g.rx, ry = g.ry, rad = g.rad;
+	if (x1 <= x0 || y1 <= y0) return;
+	if (rad <= 0 || rx <= 0 || ry <= 0) {
+		SDL_SetRenderDrawColor(r, c.r, c.g, c.b, c.a);
+		SDL_Rect all{x0, y0, x1 - x0, y1 - y0};
+		SDL_RenderFillRect(r, &all);
+		return;
+	}
 
 	SDL_Texture* t = circleTexture(rad);
 	SDL_SetTextureColorMod(t, c.r, c.g, c.b);
@@ -187,6 +215,105 @@ void Gfx::fillRoundRect(Rect rc, float radius, Color c) {
 	SDL_Rect right{x1 - rx, y0 + ry, rx, y1 - y0 - 2 * ry};
 	if (mid.w > 0) SDL_RenderFillRect(r, &mid);
 	if (left.h > 0) { SDL_RenderFillRect(r, &left); SDL_RenderFillRect(r, &right); }
+}
+
+void Gfx::gradientRoundRect(Rect rc, float radius, const GradStop* stops, int n) {
+	if (rc.w <= 0 || rc.h <= 0 || n < 2) return;
+	// Work in output pixels like fillRoundRect.
+	const Snapped g = snap(rc, radius);
+	const float x0 = (float)g.x0, x1 = (float)g.x1, y0 = (float)g.y0, y1 = (float)g.y1;
+	const float h = y1 - y0;
+	if (x1 <= x0 || h <= 0) return;
+	const float rx = (float)g.rx, ry = (float)g.ry;
+
+	auto colourAt = [&](float t) {
+		for (int i = 1; i < n; i++)
+			if (t <= stops[i].t && stops[i].t > stops[i - 1].t)
+				return lerp(stops[i - 1].c, stops[i].c, (t - stops[i - 1].t) / (stops[i].t - stops[i - 1].t));
+		return stops[n - 1].c;
+	};
+	// Horizontal inset of the outline at height y (0 in the straight middle part).
+	auto insetAt = [&](float y) {
+		float d = std::min(y - y0, y1 - y);
+		if (d >= ry || ry <= 0) return 0.0f;
+		float k = (ry - d) / ry;
+		return rx * (1.0f - std::sqrt(std::max(0.0f, 1.0f - k * k)));
+	};
+
+	constexpr int kMaxArc = 8, kMaxRows = 2 * (kMaxArc + 1) + 8;
+	// Arc steps by size: a 10 px corner needs 4, a 22 px capsule end 8 (fewer triangles on the Wii and in software).
+	const int kArc = std::clamp((int)std::ceil(ry / 3.0f), 2, kMaxArc);
+	struct Row { float y; Color c; };
+	Row rows[kMaxRows];
+	int nr = 0;
+	auto stopNear = [&](float y) {
+		for (int i = 0; i < n; i++) if (std::fabs(y0 + stops[i].t * h - y) < 0.01f) return true;
+		return false;
+	};
+	for (int i = 0; i <= kArc && nr < kMaxRows - 1; i++) {
+		float a = 1.5707963f * i / kArc, d = ry * (1.0f - std::cos(a));
+		for (float y : {y0 + d, y1 - d}) {
+			if (stopNear(y) || nr >= kMaxRows) continue;
+			rows[nr++] = {y, colourAt((y - y0) / h)};
+		}
+	}
+	for (int i = 0; i < n && nr < kMaxRows; i++) rows[nr++] = {y0 + stops[i].t * h, stops[i].c};
+	// Stable insertion sort by y (stop rows with equal y keep their order).
+	for (int i = 1; i < nr; i++) {
+		Row k = rows[i];
+		int j = i - 1;
+		while (j >= 0 && rows[j].y > k.y) { rows[j + 1] = rows[j]; j--; }
+		rows[j + 1] = k;
+	}
+
+	SDL_Vertex v[kMaxRows * 2];
+	int idx[kMaxRows * 6];
+	int ni = 0;
+	for (int i = 0; i < nr; i++) {
+		float in = insetAt(rows[i].y);
+		SDL_Color c{rows[i].c.r, rows[i].c.g, rows[i].c.b, rows[i].c.a};
+		v[2 * i] = {{x0 + in, rows[i].y}, c, {0, 0}};
+		v[2 * i + 1] = {{x1 - in, rows[i].y}, c, {0, 0}};
+		if (i > 0 && rows[i].y > rows[i - 1].y) {
+			int a = 2 * (i - 1), b = 2 * i;
+			const int q[6] = {a, a + 1, b + 1, a, b + 1, b};
+			for (int k : q) idx[ni++] = k;
+		}
+	}
+	if (ni > 0) SDL_RenderGeometry(r, nullptr, v, nr * 2, idx, ni);
+}
+
+void Gfx::glossyRoundRect(Rect rc, float radius, const theme::Gloss& gl, float hover) {
+	if (rc.w <= 0 || rc.h <= 0) return;
+	// Snap the outer rect to output pixels and use a whole-pixel outline on every side (horizontally after the 16:9
+	// squeeze), so the outline is equally thick all round instead of 2 px on one side and 1 px on the other.
+	const Snapped o = snap(rc, radius);
+	if (o.x1 <= o.x0 || o.y1 <= o.y0) return;
+	const float bw = 1.5f + 1.5f * hover;
+	const int ny = std::max(1, (int)std::lround(bw)), nx = std::max(1, (int)std::lround(bw * sx));
+	auto layout = [this](int x0, int y0, int x1, int y1) {
+		return Rect{x0 / sx, (float)y0, (x1 - x0) / sx, (float)(y1 - y0)};
+	};
+	const Rect outer = layout(o.x0, o.y0, o.x1, o.y1);
+	Color border = gl.outlineToWhite ? lerp(gl.border, Color{255, 255, 255}, 0.5f * hover) : lerp(gl.border, theme::accent, hover);
+	fillRoundRect(outer, (float)o.rad, border);
+
+	if (o.x1 - o.x0 <= 2 * nx || o.y1 - o.y0 <= 2 * ny) return;
+	const Rect body = layout(o.x0 + nx, o.y0 + ny, o.x1 - nx, o.y1 - ny);
+	float amt = gl.hoverAmount * hover;
+	Color top = lerp(gl.top, gl.hoverTo, amt), mid = lerp(gl.mid, gl.hoverTo, amt), bot = lerp(gl.bottom, gl.hoverTo, amt);
+	// The bottom ~3 px are a little darker (the button's lower edge), as a hard step.
+	float edge = std::min(3.0f, body.h * 0.12f);
+	Color edgeCol = lerp(bot, Color{0, 40, 80}, 0.08f);
+	float te = 1.0f - edge / body.h;
+	const GradStop stops[5] = {{0, top}, {0.55f, mid}, {te, lerp(mid, bot, (te - 0.55f) / 0.45f)}, {te, edgeCol}, {1, edgeCol}};
+	gradientRoundRect(body, (float)std::max(0, o.rad - ny), stops, 5);
+
+	// Shine band: top 42 %, inset from the sides, fading from gl.shineTop to gl.shineBottom.
+	float inx = std::min(10.0f, body.w * 0.2f);
+	Rect shine{body.x + inx, body.y + std::min(3.0f, body.h * 0.1f), body.w - 2 * inx, body.h * 0.42f};
+	const GradStop sh[2] = {{0, Color{255, 255, 255, gl.shineTop}}, {1, Color{255, 255, 255, gl.shineBottom}}};
+	gradientRoundRect(shine, std::min(shine.w, shine.h) / 2, sh, 2);
 }
 
 void Gfx::roundRectBorder(Rect rc, float radius, float bw, Color border, Color fill) {
@@ -312,6 +439,86 @@ SDL_Texture* Gfx::iconTexture(Icon kind, int size) {
 		};
 		break;
 	}
+		case Icon::Package: {
+			// Open box (hexagon outline with the three inner edges), stroke style.
+			const float u = s / 24, hw = 1.15f * u;
+			auto Q = [u](float gx, float gy) { return V2{gx * u, gy * u}; };
+			V2 hex[6] = {Q(3.5f, 7.5f), Q(12, 3), Q(20.5f, 7.5f), Q(20.5f, 16.5f), Q(12, 21), Q(3.5f, 16.5f)};
+			V2 mid = Q(12, 12), l = Q(3.5f, 7.5f), rr = Q(20.5f, 7.5f), bot = Q(12, 21);
+			f = [=](float x, float y) {
+				float d = std::min({segDist(x, y, mid, l), segDist(x, y, mid, rr), segDist(x, y, mid, bot)});
+				for (int i = 0, j = 5; i < 6; j = i, i++) d = std::min(d, segDist(x, y, hex[i], hex[j]));
+				return d - hw;
+			};
+			break;
+		}
+		case Icon::Gamepad: {
+			const float u = s / 24;
+			f = [=](float x, float y) {
+				float px = x / u, py = y / u;
+				float d = boxDist(px, py, 12, 11.8f, 9.6f, 4.6f, 4.4f);
+				d = std::min({d, std::hypot(px - 5.9f, py - 15.9f) - 2.6f, std::hypot(px - 18.1f, py - 15.9f) - 2.6f});
+				float cut = std::min(boxDist(px, py, 7.1f, 12, 2.0f, 0.7f, 0.3f), boxDist(px, py, 7.1f, 12, 0.7f, 2.0f, 0.3f));
+				cut = std::min({cut, std::hypot(px - 16.2f, py - 10.9f) - 1.05f, std::hypot(px - 18.0f, py - 12.8f) - 1.05f});
+				return std::max(d, -cut) * u;
+			};
+			break;
+		}
+		case Icon::Cartridge: {
+			const float u = s / 24;
+			auto Q = [u](float gx, float gy) { return V2{gx * u, gy * u}; };
+			// The outline inset by 1.3, then grown back by 1.3: rounded corners.
+			V2 body[6] = {Q(6.3f, 4.3f), Q(17.7f, 4.3f), Q(17.7f, 18.46f), Q(16.46f, 19.7f), Q(7.54f, 19.7f), Q(6.3f, 18.46f)};
+			V2 pin[4][2] = {{Q(8.6f, 17), Q(8.6f, 19.2f)}, {Q(10.9f, 17), Q(10.9f, 19.2f)}, {Q(13.1f, 17), Q(13.1f, 19.2f)},
+			                {Q(15.4f, 17), Q(15.4f, 19.2f)}};
+			f = [=](float x, float y) {
+				float d = polyDist(x, y, body, 6) - 1.3f * u;
+				float cut = boxDist(x / u, y / u, 12, 9.1f, 4.0f, 3.5f, 1.2f) * u;
+				for (auto& p : pin) cut = std::min(cut, segDist(x, y, p[0], p[1]) - 0.65f * u);
+				return std::max(d, -cut);
+			};
+			break;
+		}
+		case Icon::Wrench: {
+			const float u = s / 24;
+			V2 head = {15.2f * u, 8.8f * u}, jaw = {21.5f * u, 2.5f * u}, h0 = {6.4f * u, 17.6f * u}, h1 = {12.6f * u, 11.4f * u};
+			f = [=](float x, float y) {
+				float d = std::min(std::hypot(x - head.x, y - head.y) - 5.2f * u, segDist(x, y, h0, h1) - 2.3f * u);
+				float notch = segDist(x, y, head, jaw) - 1.9f * u;
+				return std::max(d, -notch);
+			};
+			break;
+		}
+		case Icon::Play: {
+			const float u = s / 24, r = 1.3f * u;
+			V2 t[3] = {{8.2f * u, 3.8f * u}, {8.2f * u, 20.2f * u}, {21.0f * u, 12.0f * u}};
+			// Round the corners: shrink the triangle about its incentre so its edges move in by r, then grow by r.
+			float a = std::hypot(t[1].x - t[2].x, t[1].y - t[2].y), b = std::hypot(t[0].x - t[2].x, t[0].y - t[2].y),
+			      c = std::hypot(t[0].x - t[1].x, t[0].y - t[1].y), per = a + b + c;
+			V2 inc = {(a * t[0].x + b * t[1].x + c * t[2].x) / per, (a * t[0].y + b * t[1].y + c * t[2].y) / per};
+			float area = std::fabs((t[1].x - t[0].x) * (t[2].y - t[0].y) - (t[2].x - t[0].x) * (t[1].y - t[0].y)) / 2;
+			float k = 1.0f - r / (area / (per / 2));
+			for (V2& v : t) v = {inc.x + (v.x - inc.x) * k, inc.y + (v.y - inc.y) * k};
+			f = [=](float x, float y) { return polyDist(x, y, t, 3) - r; };
+			break;
+		}
+		case Icon::Sparkle: {
+			const float u = s / 24;
+			auto Q = [u](float gx, float gy) { return V2{gx * u, gy * u}; };
+			V2 big[8] = {Q(11, 2.8f), Q(13.1f, 8.5f), Q(18.8f, 10.6f), Q(13.1f, 12.7f), Q(11, 18.4f), Q(8.9f, 12.7f), Q(3.2f, 10.6f), Q(8.9f, 8.5f)};
+			V2 small[8] = {Q(18.3f, 14.6f), Q(19.2f, 16.9f), Q(21.5f, 17.8f), Q(19.2f, 18.7f), Q(18.3f, 21), Q(17.4f, 18.7f), Q(15.1f, 17.8f), Q(17.4f, 16.9f)};
+			f = [=](float x, float y) { return std::min(polyDist(x, y, big, 8), polyDist(x, y, small, 8)) - 0.25f * u; };
+			break;
+		}
+		case Icon::Grid: {
+			const float u = s / 24;
+			f = [=](float x, float y) {
+				float px = x / u, py = y / u, d = 1e9f;
+				for (float cx : {7.0f, 17.0f}) for (float cy : {7.0f, 17.0f}) d = std::min(d, boxDist(px, py, cx, cy, 4, 4, 2.2f));
+				return d * u;
+			};
+			break;
+		}
 	}
 	SDL_Texture* tex = maskTexture(size, size, f);
 	icons[key] = tex;

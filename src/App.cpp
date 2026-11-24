@@ -35,6 +35,9 @@ bool App::init(int argc, char** argv) {
 	}
 	platform::init(argc, argv);
 	if (!gfx.init(platform::widescreen(), 2)) return false;
+	// Corner masks for every radius the UI reaches, hover growth, focus glow and shadow spread included (the largest
+	// is the 54 px Download capsule's shadow, 27 + 2 + 6). Built here once so hovering never creates textures mid-frame.
+	gfx.prewarmCircles(40);
 	if (!text.init(gfx.renderer(), gfx.scaleX())) return false;
 	audio::init(platform::dataDir());
 	writeLastRunProbe();
@@ -181,6 +184,14 @@ void App::comingSoon(const char* what) {
 void App::openDownloads() { comingSoon("Downloads"); }
 void App::openSettings() { comingSoon("Settings"); }
 
+void App::openMyApps() {
+	Dialog d;
+	d.title = "Coming soon";
+	d.message = "My apps is coming soon. Apps you install and their updates will appear here.";
+	d.primaryIndex = 0;
+	showDialog(std::move(d));
+}
+
 void App::topBar(Ui& ui, std::string_view title, std::string_view subtitle,
                  std::initializer_list<TopBarAction> hide) {
 	TopBarButtons buttons;
@@ -206,11 +217,15 @@ void App::run() {
 	Uint64 last = SDL_GetPerformanceCounter();
 	const double freq = (double)SDL_GetPerformanceFrequency();
 	Input in;
+	// perf=1 bookkeeping: sums over the last 120 frames, in ms (draw = beginFrame to just before present).
+	double perfCpu = 0, perfPresent = 0, perfFrame = 0;
+	int perfFrames = 0;
 
 	while (!quitRequested) {
 		Uint64 now = SDL_GetPerformanceCounter();
 		float dt = std::min(0.1f, (float)((now - last) / freq));
 		last = now;
+		perfFrame += dt * 1000.0;
 
 		platform::poll(in, dt, gfx.width());
 		if (in.quit) break;
@@ -250,15 +265,28 @@ void App::run() {
 		if (ui.inputEnabled && !dialog && (in.pressed & BTN_HOME) && !stack.back()->handleHome(*this)) quitPrompt();
 		audio::setMusicSuspended(dialog && dialog->pausesMusic);
 
+		Uint64 drawStart = SDL_GetPerformanceCounter();
 		gfx.beginFrame();
 		gfx.background();
 		stack.back()->draw(*this, ui);
 		if (dialog) drawDialog();
 		if (fade > 0) gfx.fillRect({0, 0, (float)gfx.width(), (float)gfx.height()}, theme::white.withAlpha(fade));
 		if (in.pointerValid) gfx.cursor(in.px, in.py);
+		Uint64 beforePresent = SDL_GetPerformanceCounter();
 		gfx.endFrame();
 
 		text.endFrame();
+		if (opts.perf) {
+			Uint64 end = SDL_GetPerformanceCounter();
+			perfCpu += (double)(beforePresent - drawStart) * 1000.0 / freq;
+			perfPresent += (double)(end - beforePresent) * 1000.0 / freq;
+			if (++perfFrames == 120) {
+				LOG("perf: frame %.2f ms, draw %.2f ms, present %.2f ms, masks created %d (%d frames)", perfFrame / 120,
+				    perfCpu / 120, perfPresent / 120, gfx.masksCreated(), perfFrames);
+				perfCpu = perfPresent = perfFrame = 0;
+				perfFrames = 0;
+			}
+		}
 	}
 }
 
@@ -333,11 +361,21 @@ void App::drawDialog() {
 	float bx = p.cx() - (n * bw + (n - 1) * 16) / 2;
 	float by = p.bottom() - 24 - 46;
 	int chosen = -1;
+	// The D-pad's starting point: the primary button, else the cancel button, else the first one. Never the
+	// destructive button: pressing A at once must not delete anything. Set explicitly so Ui's own fallback (the first
+	// item on the layer) can never land on it.
+	auto safe = [&](int i) { return i >= 0 && i < n && i != d.destructiveIndex; };
+	int start = safe(d.primaryIndex) ? d.primaryIndex : safe(d.cancelIndex) ? d.cancelIndex : -1;
+	for (int i = 0; start < 0 && i < n; i++) if (safe(i)) start = i;
 	for (int i = 0; i < n; i++) {
 		Id id = makeId("dialog:button", (uint32_t)i);
-		Pill style = i == d.primaryIndex ? Pill::Primary : Pill::Normal;
-		if (pillButton(ui, id, {bx + i * (bw + 16), by, bw, 46}, d.buttons[i], style)) chosen = i;
-		if (i == d.primaryIndex) ui.setDefaultFocus(id);
+		Pill style = i == d.destructiveIndex ? Pill::Destructive : i == d.primaryIndex ? Pill::Primary : Pill::Normal;
+		if (pillButton(ui, id, {bx + i * (bw + 16), by, bw, 46}, d.buttons[i], {.style = style})) chosen = i;
+		if (i != start) continue;
+		ui.setDefaultFocus(id);
+		// A non-destructive primary is focused straight away for D-pad / keyboard users (A answers at once). Only
+		// when no pointer is aimed and nothing is focused yet, so it never fights the Wii Remote.
+		if (i == d.primaryIndex) ui.focusForDpad(id);
 	}
 	if (chosen < 0 && ui.pressed(BTN_BACK)) { chosen = d.cancelIndex; audio::play(audio::Sfx::Back); }
 	ui.popLayer();

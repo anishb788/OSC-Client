@@ -87,6 +87,8 @@ bool widescreen() { return CONF_GetAspectRatio() == CONF_ASPECT_16_9; }
 
 const char* exitLabel() { return "Exit"; }
 
+const char* musicToggleHint() { return "Press 1 to toggle music"; }
+
 void poll(Input& in, float dt, int layoutW) {
 	in = Input{};
 	SDL_Event e;
@@ -174,6 +176,8 @@ bool widescreen() {
 }
 
 const char* exitLabel() { return "Quit"; }
+
+const char* musicToggleHint() { return "Press F2 to toggle music"; }
 
 void poll(Input& in, float dt, int layoutW) {
 	(void)layoutW;

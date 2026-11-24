@@ -13,54 +13,66 @@ void drawCard(Ui& ui, Rect r, float hov, float radius) {
 	ui.g.roundRectBorder(g, radius, bw, lerp(theme::border, theme::accent, hov), theme::card);
 }
 
-bool pillButton(Ui& ui, Id id, Rect r, std::string_view label, Pill style, std::optional<Icon> icon, int fontSize,
-                std::optional<Color> iconColor) {
+namespace {
+const theme::Gloss& glossFor(Pill style) {
+	switch (style) {
+	case Pill::Primary: return theme::glossPrimary;
+	case Pill::Selected: return theme::glossSelected;
+	case Pill::Destructive: return theme::glossDestructive;
+	case Pill::Normal: break;
+	}
+	return theme::glossNormal;
+}
+} // namespace
+
+// Every button in the UI is drawn here (pills, top-bar capsules, arrows, keyboard keys, dialog buttons), so the
+// glossy look lives in one place: Gfx::glossyRoundRect with a preset from Theme.h.
+bool pillButton(Ui& ui, Id id, Rect r, std::string_view label, const PillSpec& spec) {
 	bool clicked = ui.item(id, r);
 	float hov = ui.hover(id);
 	Rect g = r.inset(-2.0f * hov);
-	float rad = g.h / 2;
-
-	Color fill = theme::card, edge = lerp(theme::border, theme::accent, hov), fg = theme::text;
-	if (style == Pill::Primary) {
-		fill = lerp(theme::accent, Color{90, 205, 245}, hov);
-		edge = lerp(theme::accentDark, Color{255, 255, 255}, hov * 0.6f);
-		fg = theme::white;
-	} else if (style == Pill::Selected) {
-		fill = theme::accent;
-		edge = lerp(theme::accentDark, theme::accent, hov);
-		fg = theme::white;
-	}
+	float rad = spec.radius >= 0 ? std::min(spec.radius, std::min(g.w, g.h) / 2) : std::min(g.w, g.h) / 2;
+	const theme::Gloss& gloss = glossFor(spec.style);
+	Color fg = gloss.text;
+	const int fontSize = spec.fontSize;
+	const std::optional<Icon>& icon = spec.icon;
 
 	ui.g.softShadow(g, rad, 0.8f + hov * 0.6f);
 	if (hov > 0.01f) ui.g.fillRoundRect(g.inset(-3), rad + 3, theme::accent.withAlpha(0.25f * hov));
-	ui.g.roundRectBorder(g, rad, 1.5f + 1.5f * hov, edge, fill);
-	// Glossy top highlight.
-	ui.g.fillRoundRect({g.x + rad * 0.6f, g.y + 3, g.w - rad * 1.2f, g.h * 0.34f}, g.h * 0.17f,
-	                   Color{255, 255, 255, (Uint8)(style == Pill::Normal ? 0 : 50)});
+	ui.g.glossyRoundRect(g, rad, gloss, hov);
 
+	// Optional trailing badge ("2 updates"): white bold text on orange, 8 px from the right edge.
+	float badgeW = 0;
+	if (!spec.badge.empty()) {
+		const int bs = 13;
+		badgeW = (float)ui.t.width(Font::Bold, bs, spec.badge) + 20;
+		Rect b{g.right() - 8 - badgeW, g.cy() - 13 + spec.contentDy, badgeW, 26};
+		ui.g.fillRoundRect(b, 13, theme::orange);
+		ui.t.drawIn(Font::Bold, bs, spec.badge, b, theme::white, Align::Center);
+		badgeW += 8 + 8;
+	}
+
+	float dy = spec.contentDy;
 	int tw = ui.t.width(Font::Bold, fontSize, label);
 	float iconSize = icon ? fontSize * 1.15f : 0;
-	float gap = icon && !label.empty() ? 8 : 0;
-	float total = std::min(iconSize + gap + tw, g.w - 24);
-	float x = g.cx() - total / 2;
+	float gap = icon && !label.empty() ? (spec.leftAlign ? 10 : 8) : 0;
+	float total = std::min(iconSize + gap + tw, g.w - 24 - badgeW);
+	float x = spec.leftAlign ? g.x + spec.padLeft : g.cx() - total / 2;
 	if (icon) {
-		ui.g.icon(*icon, {x, g.cy() - iconSize / 2, iconSize, iconSize}, iconColor.value_or(fg));
+		ui.g.icon(*icon, {x, g.cy() - iconSize / 2 + dy, iconSize, iconSize}, spec.iconColor.value_or(fg));
 		x += iconSize + gap;
 	}
-	ui.t.drawIn(Font::Bold, fontSize, label, {x, g.y, total - iconSize - gap + 1, g.h}, fg);
+	if (!label.empty()) {
+		Rect tr{x, g.y + dy, total - iconSize - gap + 1, g.h};
+		if (gloss.textShadow.a) ui.t.drawIn(Font::Bold, fontSize, label, tr.offset(0, 1), gloss.textShadow);
+		ui.t.drawIn(Font::Bold, fontSize, label, tr, fg);
+	}
 	return clicked;
 }
 
-bool arrowButton(Ui& ui, Id id, float cx, float cy, Icon dir, float radius) {
-	Rect r{cx - radius, cy - radius, radius * 2, radius * 2};
-	bool clicked = ui.item(id, r);
-	float hov = ui.hover(id);
-	float rr = radius + 2 * hov;
-	ui.g.softShadow({cx - rr, cy - rr, rr * 2, rr * 2}, rr, 0.8f);
-	ui.g.circle(cx, cy, rr, lerp(theme::border, theme::accent, hov));
-	ui.g.circle(cx, cy, rr - 2 - hov, lerp(theme::card, theme::accent, hov));
-	ui.g.icon(dir, {cx - rr * 0.6f, cy - rr * 0.6f, rr * 1.2f, rr * 1.2f}, lerp(theme::accent, theme::white, hov));
-	return clicked;
+bool arrowButton(Ui& ui, Id id, Rect r, Icon dir, int iconFontSize) {
+	// A capsule like every other button (same hover growth, focus ring and, from Increment 4e, gloss).
+	return pillButton(ui, id, r, {}, {.icon = dir, .fontSize = iconFontSize, .iconColor = theme::accentDark});
 }
 
 Color categoryColor(std::string_view c) {
@@ -72,6 +84,15 @@ Color categoryColor(std::string_view c) {
 	return {128, 140, 152};
 }
 
+Icon categoryIcon(std::string_view c) {
+	if (c == "games") return Icon::Gamepad;
+	if (c == "emulators") return Icon::Cartridge;
+	if (c == "utilities") return Icon::Wrench;
+	if (c == "media") return Icon::Play;
+	if (c == "demos") return Icon::Sparkle;
+	return Icon::Grid;
+}
+
 void drawAppIcon(Ui& ui, const AppEntry& app, Rect r) {
 	Color base = categoryColor(app.category);
 	// Vary the hue a little per app so neighbouring placeholders differ.
@@ -79,10 +100,10 @@ void drawAppIcon(Ui& ui, const AppEntry& app, Rect r) {
 	Color top = lerp(base, theme::white, 0.25f + (h % 7) * 0.03f);
 	Color bottom = lerp(base, Color{0, 0, 0}, 0.08f + (h % 5) * 0.03f);
 	float rad = std::min(r.h * 0.22f, 10.0f);
+	// Anti-aliased base in the bottom colour, the gradient inside it (gradientRoundRect's own edge is not smoothed).
 	ui.g.fillRoundRect(r, rad, bottom);
-	ui.g.pushClip(r.inset(1));
-	ui.g.gradientV(r.inset(1), top, bottom);
-	ui.g.popClip();
+	const Gfx::GradStop stops[2] = {{0, top}, {1, bottom}};
+	ui.g.gradientRoundRect(r.inset(1), std::max(0.0f, rad - 1), stops, 2);
 	ui.g.fillRoundRect({r.x + 3, r.y + 2, r.w - 6, r.h * 0.4f}, rad * 0.8f, Color{255, 255, 255, 40});
 	int size = std::max(10, (int)(r.h * 0.36f));
 	ui.t.drawIn(Font::Bold, size, app.name, r.inset(r.h * 0.18f, 0), theme::white, Align::Center);
@@ -109,13 +130,17 @@ constexpr const char* kTopBarIds[topbar::kCount] = {"topbar:downloads", "topbar:
 bool topBarCapsule(Ui& ui, Id id, const topbar::Box& box, Icon icon, const TopBarButton& st) {
 	Rect r{box.x, box.y, box.w, box.h};
 	if (st.active) ui.g.fillRoundRect(r.inset(-2), r.h / 2 + 2, theme::accent); // peeks out around the pill's border
-	bool clicked = pillButton(ui, id, r, {}, Pill::Normal, icon, 17, theme::accentDark);
+	// With a progress strip the icon moves up 3 px so the strip has clear space below it.
+	bool clicked = pillButton(ui, id, r, {},
+	                          {.icon = icon, .fontSize = 16, .iconColor = theme::accentDark,
+	                           .contentDy = st.progress ? -3.0f : 0.0f});
 
 	if (st.progress) {
-		Rect track{r.x + 10, r.bottom() - 5 - 4, r.w - 20, 4};
+		// 3 px strip 8 px above the bottom edge, between the icon (4.8 px clear above) and the capsule's lower edge.
+		Rect track{r.x + 10, r.bottom() - 8 - 3, r.w - 20, 3};
 		float p = std::clamp(*st.progress, 0.0f, 1.0f);
-		ui.g.fillRoundRect(track, 2, Color{215, 225, 233});
-		if (p > 0.01f) ui.g.fillRoundRect({track.x, track.y, std::max(4.0f, track.w * p), track.h}, 2, theme::accent);
+		ui.g.fillRoundRect(track, 1.5f, Color{215, 225, 233});
+		if (p > 0.01f) ui.g.fillRoundRect({track.x, track.y, std::max(3.0f, track.w * p), track.h}, 1.5f, theme::accent);
 	}
 	return clicked;
 }
@@ -181,6 +206,6 @@ void drawBottomBar(Ui& ui) {
 bool backButton(Ui& ui, std::string_view label) {
 	float H = (float)ui.g.height();
 	Rect r{theme::margin, H - theme::bottomBarH + 12, 132, 40};
-	bool clicked = pillButton(ui, makeId("bottom:back"), r, label, Pill::Normal, Icon::ChevronLeft, 17);
+	bool clicked = pillButton(ui, makeId("bottom:back"), r, label, {.icon = Icon::ChevronLeft, .fontSize = 17});
 	return clicked || ui.pressed(BTN_BACK);
 }

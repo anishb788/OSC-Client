@@ -33,6 +33,7 @@ struct Dialog {
 	std::vector<std::string> buttons{"OK"};
 	int cancelIndex = 0;                 // Message dialogs: the button B / Back chooses
 	int primaryIndex = -1;               // drawn as the blue button
+	int destructiveIndex = -1;           // drawn as the red button (confirming a deletion); wins over primaryIndex
 	// Called with the chosen button's index when a Message dialog closes, including the "done" message a
 	// Progress dialog turns into when it finishes. Never called for a cancel; see onCancel.
 	std::function<void(int)> onChoose;
@@ -119,6 +120,8 @@ public:
 	// "coming soon" message. Refresh goes to refreshCatalog().
 	void openDownloads();
 	void openSettings();
+	// Home's "My apps" pill. M3 replaces this with the My apps screen (makeMyAppsScreen()); until then it says so.
+	void openMyApps();
 
 private:
 	void drawDialog();

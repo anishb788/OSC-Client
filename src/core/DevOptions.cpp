@@ -63,6 +63,7 @@ void DevOptions::parseFile(const std::string& text, DevOptions& o) {
 		else if (key == "mockdelay") o.mockDelayMs = parseNonNegative(val);
 		else if (key == "ratelimit") o.rateLimitSec = parseNonNegative(val);
 		else if (key == "topbar") o.topbarAll = val == "all";
+		else if (key == "perf") o.perf = truthy(val);
 	}
 }
 
@@ -78,6 +79,7 @@ DevOptions DevOptions::load(const std::string& dataDir) {
 	if (const char* v = std::getenv("OPENSHOP_MOCKDELAY"); v && *v) o.mockDelayMs = parseNonNegative(v);
 	if (const char* v = std::getenv("OPENSHOP_RATELIMIT"); v && *v) o.rateLimitSec = parseNonNegative(v);
 	if (const char* v = std::getenv("OPENSHOP_TOPBAR"); v && *v) o.topbarAll = std::string(v) == "all";
+	if (const char* v = std::getenv("OPENSHOP_PERF"); v && *v) o.perf = truthy(v);
 	return o;
 }
 
@@ -86,5 +88,5 @@ std::string DevOptions::describe() const {
 	return "screen=" + (screen.empty() ? std::string("(none)") : screen) + " mock=" + (mock ? "1" : "0") +
 	       " offline=" + (offline ? "1" : "0") + " refresh=" + (refresh ? "1" : "0") + " fail=" + failText +
 	       " topbar=" + (topbarAll ? "all" : "default") + " mockdelay=" + std::to_string(mockDelayMs) +
-	       " ratelimit=" + std::to_string(rateLimitSec);
+	       " ratelimit=" + std::to_string(rateLimitSec) + " perf=" + (perf ? "1" : "0");
 }

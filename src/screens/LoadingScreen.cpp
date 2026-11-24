@@ -134,7 +134,7 @@ private:
 		}
 		float by = std::max(y + 28, H * 0.62f), bw = 170, gap = 20;
 		Id retry = makeId("loading:retry");
-		if (pillButton(ui, retry, {cx - bw - gap / 2, by, bw, 48}, "Retry", Pill::Primary, std::nullopt, 19)) {
+		if (pillButton(ui, retry, {cx - bw - gap / 2, by, bw, 48}, "Retry", {.style = Pill::Primary, .fontSize = 19})) {
 			LOG("Retrying the catalog load");
 			startLoad(app);
 		}
@@ -143,7 +143,7 @@ private:
 		// D-pad / keyboard users can press A straight away. focusForDpad only acts when nothing is focused, no
 		// pointer is aimed and no dialog or fade is on top, so it never fights the user or the HOME dialog.
 		ui.focusForDpad(retry);
-		if (pillButton(ui, exit, {cx + gap / 2, by, bw, 48}, platform::exitLabel(), Pill::Normal, std::nullopt, 19))
+		if (pillButton(ui, exit, {cx + gap / 2, by, bw, 48}, platform::exitLabel(), {.fontSize = 19}))
 			app.quit();
 	}
 

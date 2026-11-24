@@ -61,7 +61,8 @@ static void testDevOptions() {
 	CHECK(parse("topbar=all\nscreen=list\n").screen == "list");
 
 	o = parse("screen=search\nfail=1");
-	CHECK(o.describe() == "screen=search mock=0 offline=0 refresh=0 fail=startup topbar=default mockdelay=-1 ratelimit=-1");
+	CHECK(o.describe() == "screen=search mock=0 offline=0 refresh=0 fail=startup topbar=default mockdelay=-1 ratelimit=-1 perf=0");
+	CHECK(parse("perf=1").describe().find("perf=1") != std::string::npos);
 	CHECK(parse("fail=both\nmockdelay=900\n").describe().find("fail=both") != std::string::npos);
 	CHECK(parse("fail=refresh").describe().find("fail=refresh") != std::string::npos);
 }
@@ -107,7 +108,7 @@ static void testRefreshRateLimit() {
 
 // The App wiring of the install guard, with fake screen pointers (only compared, never dereferenced).
 static void testLoadTracker() {
-	int a, b, r1, r2, home; // distinct addresses standing in for screens
+	int a = 0, b = 0, r1 = 0, r2 = 0, home = 0; // distinct addresses standing in for screens
 	const void *A = &a, *B = &b, *R1 = &r1, *R2 = &r2, *HOME = &home;
 
 	// Startup: the recorded screen installs with its current token.

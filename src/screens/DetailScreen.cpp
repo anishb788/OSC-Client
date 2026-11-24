@@ -31,7 +31,8 @@ public:
 		drawAppIcon(ui, a, {iconCard.cx() - iw / 2, iconCard.cy() - iw * 48 / 256, iw, iw * 48 / 128});
 
 		Id dlId = makeId("detail:download");
-		if (pillButton(ui, dlId, {m, iconCard.bottom() + 16, lw, 54}, "Download", Pill::Primary, Icon::Download, 20))
+		if (pillButton(ui, dlId, {m, iconCard.bottom() + 16, lw, 54}, "Download",
+		               {.style = Pill::Primary, .icon = Icon::Download, .fontSize = 20}))
 			startDownload(app);
 		ui.setDefaultFocus(dlId);
 		ui.t.drawIn(Font::Medium, 14, formatSize(a.archiveSize) + " download",
@@ -53,11 +54,14 @@ public:
 		info(ui, rx, iy, colW, "Version", version);
 		info(ui, rx + colW, iy, colW, "Released", formatDate(a.releaseDate));
 		iy += 42;
-		info(ui, rx, iy, colW, "Downloads", formatCount(a.downloads));
-		info(ui, rx + colW, iy, colW, "Works on", platforms(a));
+		// Three short values share the second row, so Controllers (the longest value: "Wii Remote, Nunchuk, Classic
+		// Controller") gets the whole width of the third instead of being cut off at 4:3.
+		const float col3 = rw / 3;
+		info(ui, rx, iy, col3, "Downloads", formatCount(a.downloads));
+		info(ui, rx + col3, iy, col3, "Works on", platforms(a));
+		info(ui, rx + 2 * col3, iy, col3, "Size on SD", formatSize(a.uncompressedSize));
 		iy += 42;
-		info(ui, rx, iy, colW, "Controllers", peripherals(a));
-		info(ui, rx + colW, iy, colW, "Size on SD", formatSize(a.uncompressedSize));
+		info(ui, rx, iy, rw, "Controllers", peripherals(a));
 		iy += 46;
 
 		// Description panel with scrolling.
@@ -68,15 +72,18 @@ public:
 		float lh = (float)ui.t.lineHeight(Font::Medium, fs);
 		if (wrappedW != (int)box.w) {
 			wrappedW = (int)box.w;
-			lines = ui.t.wrap(Font::Medium, fs, a.longDesc.empty() ? a.shortDesc : a.longDesc, wrappedW - 48);
+			lines = ui.t.wrap(Font::Medium, fs, a.longDesc.empty() ? a.shortDesc : a.longDesc, wrappedW - 56);
 		}
 		int visible = std::max(1, (int)((box.h - 20) / lh));
 		int maxScroll = std::max(0, (int)lines.size() - visible);
 		bool canScroll = maxScroll > 0;
 		if (canScroll) {
-			float ax = box.right() - 18;
-			if (scroll > 0 && arrowButton(ui, makeId("detail:up"), ax, box.y + 20, Icon::ChevronUp, 13)) scroll -= visible - 1;
-			if (scroll < maxScroll && arrowButton(ui, makeId("detail:down"), ax, box.bottom() - 20, Icon::ChevronDown, 13))
+			// Horizontal capsules 32x24 (the old circles were 26 across), clear of the text column (ends 40 px in).
+			const float aw = 32, ah = 24, ax = box.right() - 18 - aw / 2;
+			if (scroll > 0 && arrowButton(ui, makeId("detail:up"), {ax, box.y + 20 - ah / 2, aw, ah}, Icon::ChevronUp, 13))
+				scroll -= visible - 1;
+			if (scroll < maxScroll &&
+			    arrowButton(ui, makeId("detail:down"), {ax, box.bottom() - 20 - ah / 2, aw, ah}, Icon::ChevronDown, 13))
 				scroll += visible - 1;
 			scroll -= ui.wheel() * 3;
 			if (ui.pressed(BTN_PLUS)) scroll += visible - 1;

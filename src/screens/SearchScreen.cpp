@@ -78,7 +78,9 @@ public:
 		bx += wide + gap;
 		if (key(ui, makeId("key:clear"), {bx, by, wide, kh}, "Clear")) { query.clear(); update(app); }
 		bx += wide + gap;
-		bool submit = pillButton(ui, makeId("key:go"), {bx, by, wide, kh}, "Search", Pill::Primary, Icon::Search, 16);
+		bool submit = pillButton(ui, makeId("key:go"), {bx, by, wide, kh}, "Search",
+		                         {.style = Pill::Primary, .icon = Icon::Search, .fontSize = 16,
+		                          .radius = 10}); // radius 10 like the other keys
 		if (enterSubmits) submit = true;
 
 		if (dirty) update(app);
@@ -102,17 +104,11 @@ private:
 		app.push(makeListScreen("“" + query + "”", results, kSearchSorts, SortMode::Relevance));
 	}
 
-	// `on` draws the key latched (used by Shift).
+	// A keyboard key: a glossy rounded-rectangle button (pillButton, radius 10); `on` draws it latched (Shift).
 	bool key(Ui& ui, Id id, Rect r, const std::string& label, bool on = false) {
-		bool clicked = ui.item(id, r);
-		float hov = ui.hover(id);
-		Rect g = r.inset(-2 * hov);
-		ui.g.softShadow(g, 10, 0.6f);
-		Color fill = on ? theme::accent : lerp(theme::card, theme::accentSoft, hov);
-		Color fg = on ? theme::white : lerp(theme::text, theme::accentDark, hov);
-		ui.g.roundRectBorder(g, 10, 1.5f + hov * 1.5f, lerp(on ? theme::accentDark : theme::border, theme::accent, hov), fill);
-		ui.t.drawIn(Font::Bold, label.size() == 1 ? 20 : 15, label, g, fg, Align::Center);
-		return clicked;
+		return pillButton(ui, id, r, label,
+		                  {.style = on ? Pill::Selected : Pill::Normal, .fontSize = label.size() == 1 ? 20 : 15,
+		                   .radius = 10});
 	}
 
 	void append(const std::string& s) {

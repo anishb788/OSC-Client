@@ -9,13 +9,17 @@ struct DevOptions;
 // What the LoadingScreen waits on. Contract:
 // - poll() is called once per frame on the main thread and must return quickly. A loader that does slow work
 //   runs it elsewhere (the network worker, from Increment 9) and only reports its state here.
-// - After poll() has returned Done, take() is called exactly once to move the catalog out.
-// - The LoadingScreen destroys a loader at any time (Retry replaces it, Exit quits). The destructor must cancel
-//   and join any in-flight work before returning, so nothing writes into a dead loader.
+// - After poll() has returned Done, take() is called exactly once to move the catalog out. After Unchanged
+//   ("finished, keep the catalog that is installed"; the rate-limited Refresh) take() is never called.
+// - The LoadingScreen destroys a loader at any time (Retry replaces it, B cancels a Refresh, Exit quits). The
+//   destructor must cancel and join any in-flight work before returning, so nothing writes into a dead loader.
 struct LoadStatus {
-	enum class State { Pending, Done, Failed };
+	enum class State { Pending, Done, Unchanged, Failed };
 	State state = State::Pending;
-	std::string text; // Pending: status line. Failed: human-readable reason. Done: unused.
+	std::string text; // Pending: status line (empty = keep the screen's default). Failed: reason. Otherwise unused.
+	// Done: true when the catalog came from the network (the mock stands in for it), false when it came from the
+	// SD cache (Increment 10). Only a network fetch restarts the Refresh rate limit.
+	bool fromNetwork = true;
 };
 
 class CatalogLoader {
@@ -27,11 +31,24 @@ public:
 
 // The subset of DevOptions that decides how the catalog is loaded.
 struct LoaderOptions {
+	// Startup: the first load, no catalog exists yet. Refresh: a user-triggered reload; the previous catalog stays
+	// installed until (and unless) this one succeeds.
+	enum class Mode { Startup, Refresh };
+
 	bool mock = false;    // compiled-in mock data instead of the network (the only source until Increment 9)
 	bool offline = false; // cache only (Increment 10)
-	bool refresh = false; // ignore the cache TTL (Increment 10)
-	bool fail = false;    // dev hook: the first attempt fails, retries succeed
+	// Dev option `refresh=1`: ignore the cache TTL on startup too (Increment 10). Not the same as Mode::Refresh, which
+	// always ignores the TTL and never falls back to a stale cache.
+	bool ignoreTtl = false;
+	bool failStartup = false; // dev hook: the first startup attempt fails, retries succeed
+	bool failRefresh = false; // dev hook: every refresh fails
+	int mockDelayMs = -1;     // dev hook: artificial mock delay (-1 = default)
+	Mode mode = Mode::Startup;
+	// Refresh only: the last network fetch was too recent (see RefreshPolicy.h), so nothing is fetched. The loader
+	// just waits briefly and reports Unchanged; the LoadingScreen keeps the installed catalog.
+	bool reuseCurrent = false;
 
+	bool failing() const { return mode == Mode::Refresh ? failRefresh : failStartup; }
 	static LoaderOptions from(const DevOptions& o);
 };
 
@@ -40,3 +57,5 @@ std::unique_ptr<CatalogLoader> makeCatalogLoader(const LoaderOptions& opts, int 
 
 // Mock data after a short artificial delay (so the loading screen is visible). With `fail` it fails instead.
 std::unique_ptr<CatalogLoader> makeMockLoader(bool fail, int delayMs = 300);
+// Waits `delayMs`, then reports Unchanged (take() is never called). For the rate-limited Refresh.
+std::unique_ptr<CatalogLoader> makeIdleLoader(int delayMs);

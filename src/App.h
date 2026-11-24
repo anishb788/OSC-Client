@@ -8,6 +8,7 @@
 
 #include "catalog/Catalog.h"
 #include "catalog/CatalogLoader.h"
+#include "catalog/LoadTracker.h"
 #include "core/DevOptions.h"
 #include "gfx/Gfx.h"
 #include "gfx/Text.h"
@@ -59,15 +60,18 @@ public:
 	Ui ui{gfx, text};
 	// The catalog is read-only for everyone except installCatalog().
 	//
-	// INVARIANT: it is installed exactly once, while only the LoadingScreen exists, and never replaced
-	// or modified afterwards. Screens rely on that storage staying put for the whole session:
-	// DetailScreen holds a `const AppEntry&`, ListScreen and SearchScreen hold `const AppEntry*` lists
-	// (HomeScreen only borrows `featured()` within a frame). Replacing `Catalog::apps` while they exist
-	// would leave them dangling. `catalog` is a const reference so the compiler enforces the read-only part.
+	// INVARIANT: it is replaced only while the LoadingScreen App recorded for the current load is the only screen
+	// and no screen change is pending (catalogInstallRefusal), at startup and on every Refresh. Every holder of
+	// `const AppEntry&` / `const AppEntry*` is a Screen (DetailScreen holds a `const AppEntry&`, ListScreen and
+	// SearchScreen hold `const AppEntry*` lists, HomeScreen only borrows `featured()` within a frame), and the reset
+	// to the LoadingScreen destroys all of them first, so nothing can dangle. Background work (worker jobs, the
+	// IconCache, M3's installs) never holds catalog pointers: it copies what it needs and refers to apps by slug.
+	// `catalog` is a const reference so the compiler enforces the read-only part. catalogGeneration() counts the
+	// accepted installs, for caches keyed on catalog content.
 	//
-	// Future in-session refresh: either make every holder store a slug and re-resolve with
-	// `catalog.find(slug)` each draw (pop if it is gone), or hand out `std::shared_ptr<const Catalog>`
-	// snapshots so old screens keep the catalog they were built from alive. See the epic.
+	// A refresh that keeps the user's place (out of scope) would need the alternatives instead: every holder stores
+	// a slug and re-resolves with `catalog.find(slug)` each draw (pop if it is gone), or screens hold
+	// `std::shared_ptr<const Catalog>` snapshots so old screens keep the catalog they were built from alive.
 	const Catalog& catalog{catalog_};
 	DevOptions opts; // parsed once in init()
 
@@ -85,10 +89,24 @@ public:
 	// screen is still white. Returns false (nothing happens, `s` is discarded) while another transition is
 	// fading out; check canChangeScreen() first or retry next frame.
 	[[nodiscard]] bool resetTo(std::unique_ptr<Screen> s, bool openDevStart = false);
-	// The only way to set the catalog. Refuses (LOG, returns false) if it was already installed, if any screen
-	// other than the LoadingScreen exists, or if a screen change is pending (see catalogInstallRefusal).
-	[[nodiscard]] bool installCatalog(Catalog&& c);
+	// The only way to set the catalog. Refuses (LOG, returns false) unless the recorded LoadingScreen is the only
+	// screen, no screen change is pending and `token` is the one beginLoad() last returned (see LoadTracker /
+	// catalogInstallRefusal). Each accepted install bumps catalogGeneration(). `fetchedFromNetwork` is false for a
+	// catalog served from the SD cache (Increment 10): only a network fetch restarts the Refresh rate limit.
+	[[nodiscard]] bool installCatalog(Catalog&& c, uint32_t token, bool fetchedFromNetwork);
+	// The LoadingScreen calls this each time it starts a load (first draw, Retry) and passes the token to
+	// installCatalog, so a loader that a Retry replaced can't install. `from` must be the calling screen.
+	uint32_t beginLoad(const Screen* from);
+	// 0 before the first install, then +1 for every accepted install.
+	uint32_t catalogGeneration() const { return loads.generation(); }
+	// The Refresh capsule's action: reloads the catalog through the LoadingScreen and lands on [Home] (no --screen
+	// target). Does nothing (and logs why) unless a catalog is installed, no transition is fading out and no dialog
+	// is open. A Refresh within kRefreshMinIntervalSec of the last successful fetch skips the network but takes the
+	// same route. Returns true if the refresh started.
+	bool refreshCatalog();
 	void quit() { quitRequested = true; }
+	// A dialog opened while the LoadingScreen is on top (App's HOME menu) must never capture `AppEntry` pointers or
+	// references: the catalog may be replaced underneath it, and the handover to Home waits for the dialog.
 	void showDialog(Dialog d);
 	void quitPrompt(); // "Exit OpenShop?" confirmation
 
@@ -97,10 +115,9 @@ public:
 	// `hide` keeps a capsule off this screen (e.g. Downloads on the Downloads screen itself).
 	void topBar(Ui& ui, std::string_view title, std::string_view subtitle = {},
 	            std::initializer_list<TopBarAction> hide = {});
-	// Where the top-bar buttons lead. M3 replaces openDownloads(), M4 openSettings(); Increment 4b points
-	// refresh at App::refreshCatalog(). Until then each shows a "coming soon" message.
+	// Where the top-bar buttons lead. M3 replaces openDownloads(), M4 openSettings(); until then each shows a
+	// "coming soon" message. Refresh goes to refreshCatalog().
 	void openDownloads();
-	void refreshFromTopBar();
 	void openSettings();
 
 private:
@@ -112,8 +129,8 @@ private:
 	void comingSoon(const char* what);
 
 	Catalog catalog_;
-	bool catalogInstalled = false;
-	const Screen* loadingScreen = nullptr; // the startup screen, the only one allowed to exist at install time
+	// Which LoadingScreen may install, the load token, the generation and the last network fetch (host-tested).
+	LoadTracker loads;
 	std::vector<std::unique_ptr<Screen>> stack;
 	std::unique_ptr<Screen> pendingPush;
 	std::unique_ptr<Screen> pendingReset;
@@ -131,8 +148,14 @@ inline const std::vector<SortMode> kAllSorts = {SortMode::Popular, SortMode::New
 inline const std::vector<SortMode> kSearchSorts = {SortMode::Relevance, SortMode::Popular, SortMode::Newest};
 
 // Screens
+// `opts.mode` selects the startup look (error screen with Retry / Exit) or the Refresh look ("Press B to cancel").
 std::unique_ptr<Screen> makeLoadingScreen(const LoaderOptions& opts);
-std::unique_ptr<Screen> makeHomeScreen();
+// A failed Refresh: Home shows "Couldn't refresh" on its first frame after the fade-in. Copied strings only.
+struct RefreshNotice {
+	std::string reason;    // describe()-style reason
+	std::string fetchedAt; // formatted date of the catalog that stays in use
+};
+std::unique_ptr<Screen> makeHomeScreen(std::optional<RefreshNotice> notice = std::nullopt);
 std::unique_ptr<Screen> makeListScreen(std::string title, std::vector<const AppEntry*> apps,
                                        std::vector<SortMode> sorts, SortMode initial,
                                        std::string emptyMessage = "No apps here yet.");

@@ -8,6 +8,7 @@
 
 #include "audio/Audio.h"
 #include "catalog/InstallGuard.h"
+#include "catalog/RefreshPolicy.h"
 #include "core/Log.h"
 #include "core/Version.h"
 #include "gfx/Theme.h"
@@ -46,7 +47,7 @@ bool App::init(int argc, char** argv) {
 	else LOG("SDL2_image: IMG_Init(PNG) failed: %s", IMG_GetError());
 
 	auto loading = makeLoadingScreen(LoaderOptions::from(opts));
-	loadingScreen = loading.get();
+	loads.recordStartupScreen(loading.get());
 	stack.push_back(std::move(loading));
 	return true;
 }
@@ -95,18 +96,41 @@ bool App::resetTo(std::unique_ptr<Screen> s, bool openDevStart) {
 	return true;
 }
 
-bool App::installCatalog(Catalog&& c) {
-	InstallState st;
-	st.alreadyInstalled = catalogInstalled;
-	st.onlyLoadingScreen = stack.size() == 1 && stack.front().get() == loadingScreen;
-	st.screenChangePending = pendingPush || pendingReset || pendingPop;
-	if (const char* why = catalogInstallRefusal(st)) {
+uint32_t App::beginLoad(const Screen* from) { return loads.beginLoad(from); }
+
+bool App::installCatalog(Catalog&& c, uint32_t token, bool fetchedFromNetwork) {
+	const void* only = stack.size() == 1 ? stack.front().get() : nullptr;
+	if (const char* why = loads.refusal(only, pendingPush || pendingReset || pendingPop, token)) {
 		LOG("installCatalog refused: %s", why);
 		return false;
 	}
 	catalog_ = std::move(c);
-	catalogInstalled = true;
-	LOG("Catalog installed: %d apps", (int)catalog_.apps.size());
+	loads.accepted(SDL_GetTicks(), fetchedFromNetwork);
+	LOG("installCatalog accepted, generation %u: %d apps%s", loads.generation(), (int)catalog_.apps.size(),
+	    fetchedFromNetwork ? "" : " (not a network fetch)");
+	return true;
+}
+
+bool App::refreshCatalog() {
+	if (!loads.installed()) { LOG("Refresh ignored: no catalog is installed yet"); return false; }
+	if (!canChangeScreen()) { LOG("Refresh ignored: a screen change is in progress"); return false; }
+	if (dialog) { LOG("Refresh ignored: a dialog is open"); return false; }
+	LoaderOptions lo = LoaderOptions::from(opts);
+	lo.mode = LoaderOptions::Mode::Refresh;
+	int limit = opts.rateLimitSec >= 0 ? opts.rateLimitSec : kRefreshMinIntervalSec;
+	// The fail=refresh dev hook would never fire inside the first minute otherwise; an explicit ratelimit= wins.
+	if (opts.failRefresh && opts.rateLimitSec < 0) limit = 0;
+	const int64_t since = loads.msSinceFetch(SDL_GetTicks());
+	if (refreshRateLimited(since, limit)) {
+		lo.reuseCurrent = true;
+		LOG("Refresh: last fetch %lld s ago (< %d s), skipping the network", (long long)(since / 1000), limit);
+	} else {
+		LOG("Refresh: fetching the catalog (generation %u so far)", loads.generation());
+	}
+	auto screen = makeLoadingScreen(lo);
+	const Screen* raw = screen.get();
+	if (!resetTo(std::move(screen), false)) return false;
+	loads.setPendingScreen(raw);
 	return true;
 }
 
@@ -155,12 +179,12 @@ void App::comingSoon(const char* what) {
 }
 
 void App::openDownloads() { comingSoon("Downloads"); }
-void App::refreshFromTopBar() { comingSoon("Refresh"); }
 void App::openSettings() { comingSoon("Settings"); }
 
 void App::topBar(Ui& ui, std::string_view title, std::string_view subtitle,
                  std::initializer_list<TopBarAction> hide) {
 	TopBarButtons buttons;
+	buttons[TopBarAction::Refresh].visible = true; // Downloads (M3) and Settings (M4) stay hidden until they exist
 	if (opts.topbarAll) {
 		for (auto& b : buttons.b) b.visible = true;
 		// Fake state so the preview shows the active outline, progress strip and count badge.
@@ -173,7 +197,7 @@ void App::topBar(Ui& ui, std::string_view title, std::string_view subtitle,
 	if (!act) return;
 	switch (*act) {
 	case TopBarAction::Downloads: openDownloads(); break;
-	case TopBarAction::Refresh: refreshFromTopBar(); break;
+	case TopBarAction::Refresh: (void)refreshCatalog(); break;
 	case TopBarAction::Settings: openSettings(); break;
 	}
 }
@@ -199,12 +223,14 @@ void App::run() {
 				if (pendingReset) {
 					dropDialog();
 					stack.clear();
-					loadingScreen = nullptr; // it was just destroyed (it only ever lives at the bottom of the stack)
 					stack.push_back(std::move(pendingReset));
+					// Only the screen refreshCatalog() handed to resetTo becomes the recorded LoadingScreen.
+					loads.onStackReset(stack.front().get());
 					pendingPush.reset();
 					pendingPop = false;
 					if (resetOpensDevStart) openDevStartScreen();
 					resetOpensDevStart = false;
+					LOG("Screen stack reset: %d screen(s)%s", (int)stack.size(), loads.recordedScreen() ? " (the LoadingScreen)" : "");
 				}
 				if (pendingPop && stack.size() > 1) stack.pop_back();
 				if (pendingPush) stack.push_back(std::move(pendingPush));

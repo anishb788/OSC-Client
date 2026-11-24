@@ -43,6 +43,9 @@ public:
 	std::vector<Category> categories;
 	std::vector<AppEntry> apps;
 	std::string featuredSlug;
+	// When this catalog was fetched (unix seconds, 0 = unknown). Mock: when the mock catalog was built; Increment 10
+	// fills it from the cache metadata. Shown by the "Couldn't refresh" message.
+	int64_t fetchedAt = 0;
 
 	// Must be called once after `apps`, `categories` and `featuredSlug` are filled (loadMockCatalog and the API
 	// parser both do). It sanitizes every text field (see sanitizeText), computes the lowercase search fields, the
@@ -87,6 +90,8 @@ bool isValidSlug(std::string_view slug);
 // Display helpers
 std::string formatSize(uint64_t bytes);
 std::string formatDate(int64_t unixSeconds);
+// "Nov 24, 2026, 14:03" in the device's local time (UTC when the platform has no time zone); "an unknown date" for <= 0.
+std::string formatDateTime(int64_t unixSeconds);
 std::string formatCount(uint32_t n);
 std::string peripheralName(std::string_view id);
 std::string platformName(std::string_view id);

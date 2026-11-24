@@ -191,6 +191,8 @@ std::string formatSize(uint64_t bytes) {
 	return buf;
 }
 
+// Catalog release dates are calendar days stored as UTC midnight, so they are shown in UTC (local time could
+// move them to the previous day).
 std::string formatDate(int64_t t) {
 	if (t <= 0) return "Unknown";
 	std::time_t tt = (std::time_t)t;
@@ -199,6 +201,20 @@ std::string formatDate(int64_t t) {
 	static const char* months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
 	char buf[32];
 	std::snprintf(buf, sizeof buf, "%s %d, %d", months[tm->tm_mon], tm->tm_mday, tm->tm_year + 1900);
+	return buf;
+}
+
+// fetchedAt is "now" when the catalog arrived, so it is shown in local time (the Wii has no time zone, so this
+// equals UTC there; on PC it matches the user's clock).
+std::string formatDateTime(int64_t t) {
+	if (t <= 0) return "an unknown date";
+	std::time_t tt = (std::time_t)t;
+	std::tm tmv{};
+	if (!localtime_r(&tt, &tmv)) return "an unknown date";
+	static const char* months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+	char buf[48];
+	std::snprintf(buf, sizeof buf, "%s %d, %d, %02d:%02d", months[tmv.tm_mon % 12], tmv.tm_mday, tmv.tm_year + 1900,
+	              tmv.tm_hour, tmv.tm_min);
 	return buf;
 }
 

@@ -1,9 +1,11 @@
-// Host tests for small pure pieces outside the catalog: dev option parsing and the catalog install guard.
+// Host tests for small pure pieces outside the catalog: dev option parsing, the catalog install guard and the Refresh rate limit.
 #include <cstdio>
 #include <cstdlib>
 #include <string>
 
 #include "catalog/InstallGuard.h"
+#include "catalog/LoadTracker.h"
+#include "catalog/RefreshPolicy.h"
 #include "core/DevOptions.h"
 
 static int failures = 0;
@@ -18,17 +20,32 @@ static DevOptions parse(const std::string& text) {
 
 static void testDevOptions() {
 	DevOptions o = parse("screen=detail\nmock=1\nfail=1\n");
-	CHECK(o.screen == "detail" && o.mock && o.fail && !o.offline && !o.refresh);
+	CHECK(o.screen == "detail" && o.mock && o.failStartup && !o.failRefresh && !o.offline && !o.refresh);
 
-	CHECK(parse("fail=0\n").fail == false);
-	CHECK(parse("fail=false\n").fail == false);
-	CHECK(parse("fail=off\n").fail == false);
-	CHECK(parse("fail=yes\n").fail == true);
-	CHECK(parse("fail=\n").fail == false);
+	// fail=: 1 / startup / any other truthy value mean startup; refresh; both; the rest is off.
+	CHECK(parse("fail=startup\n").failStartup && !parse("fail=startup\n").failRefresh);
+	CHECK(parse("fail=refresh\n").failRefresh && !parse("fail=refresh\n").failStartup);
+	CHECK(parse("fail=both\n").failStartup && parse("fail=both\n").failRefresh);
+	CHECK(parse("fail=yes\n").failStartup && !parse("fail=yes\n").failRefresh);
+	for (const char* off : {"fail=0\n", "fail=false\n", "fail=off\n", "fail=\n", "fail=none\n", ""}) {
+		CHECK(!parse(off).failStartup && !parse(off).failRefresh);
+	}
+	CHECK(!parse("fail=both\nfail=0\n").failRefresh); // last value wins, fully
+	CHECK(!parse("fail=refresh\nfail=startup\n").failRefresh);
+
+	// mockdelay= / ratelimit=: non-negative integers; anything else keeps the built-in default (-1).
+	CHECK(parse("").mockDelayMs == -1 && parse("").rateLimitSec == -1);
+	CHECK(parse("mockdelay=4000\n").mockDelayMs == 4000);
+	CHECK(parse("mockdelay=0\n").mockDelayMs == 0);
+	CHECK(parse("mockdelay=abc\n").mockDelayMs == -1);
+	CHECK(parse("mockdelay=-5\n").mockDelayMs == -1);
+	CHECK(parse("ratelimit=0\n").rateLimitSec == 0);
+	CHECK(parse("ratelimit=15\n").rateLimitSec == 15);
+	CHECK(parse("ratelimit=\n").rateLimitSec == -1);
 
 	// CRLF, spaces, comments, unknown keys, bare screen name (old format), last value wins.
 	o = parse("# comment\r\n  screen = list \r\nunknown=1\r\noffline=1\r\nrefresh=1\r\n");
-	CHECK(o.screen == "list" && o.offline && o.refresh && !o.fail);
+	CHECK(o.screen == "list" && o.offline && o.refresh && !o.failStartup);
 	CHECK(parse("search").screen == "search");
 	CHECK(parse("screen=home\nscreen=dialog\n").screen == "dialog");
 	CHECK(parse("").screen.empty());
@@ -44,29 +61,138 @@ static void testDevOptions() {
 	CHECK(parse("topbar=all\nscreen=list\n").screen == "list");
 
 	o = parse("screen=search\nfail=1");
-	CHECK(o.describe() == "screen=search mock=0 offline=0 refresh=0 fail=1 topbar=default");
+	CHECK(o.describe() == "screen=search mock=0 offline=0 refresh=0 fail=startup topbar=default mockdelay=-1 ratelimit=-1");
+	CHECK(parse("fail=both\nmockdelay=900\n").describe().find("fail=both") != std::string::npos);
+	CHECK(parse("fail=refresh").describe().find("fail=refresh") != std::string::npos);
 }
 
 static void testInstallGuard() {
+	// The recorded LoadingScreen alone, nothing pending, current loader: allowed, any number of times.
 	InstallState ok;
 	CHECK(catalogInstallRefusal(ok) == nullptr);
+	CHECK(catalogInstallRefusal(ok) == nullptr); // a second install (the Refresh LoadingScreen) is fine
 
-	InstallState twice;
-	twice.alreadyInstalled = true;
-	CHECK(catalogInstallRefusal(twice) != nullptr); // the second install is refused
-
+	// A second install while Home (or any other non-loading screen) exists is refused.
 	InstallState otherScreen;
 	otherScreen.onlyLoadingScreen = false;
 	CHECK(catalogInstallRefusal(otherScreen) != nullptr);
 
+	// A pending push, pop or reset refuses (a pending reset could put a screen on top).
 	InstallState pending;
 	pending.screenChangePending = true;
 	CHECK(catalogInstallRefusal(pending) != nullptr);
+
+	// A stale loader (replaced by a Retry, or from another screen) is refused.
+	InstallState stale;
+	stale.loaderMatches = false;
+	CHECK(catalogInstallRefusal(stale) != nullptr);
+
+	// Every condition is checked, and each refusal has a reason.
+	InstallState all;
+	all.onlyLoadingScreen = all.loaderMatches = false;
+	all.screenChangePending = true;
+	CHECK(catalogInstallRefusal(all) != nullptr);
+}
+
+static void testRefreshRateLimit() {
+	CHECK(kRefreshMinIntervalSec == 60);
+	CHECK(!refreshRateLimited(-1, 60));        // no fetch yet
+	CHECK(refreshRateLimited(0, 60));
+	CHECK(refreshRateLimited(59999, 60));
+	CHECK(!refreshRateLimited(60000, 60));     // exactly 60 s ago: fetch
+	CHECK(!refreshRateLimited(3600 * 1000, 60));
+	CHECK(!refreshRateLimited(1000, 0));       // ratelimit=0 turns it off
+	CHECK(refreshRateLimited(5000, 15) == true && refreshRateLimited(15000, 15) == false);
+}
+
+// The App wiring of the install guard, with fake screen pointers (only compared, never dereferenced).
+static void testLoadTracker() {
+	int a, b, r1, r2, home; // distinct addresses standing in for screens
+	const void *A = &a, *B = &b, *R1 = &r1, *R2 = &r2, *HOME = &home;
+
+	// Startup: the recorded screen installs with its current token.
+	LoadTracker t;
+	CHECK(!t.installed() && t.generation() == 0 && t.msSinceFetch(1000) == -1);
+	t.recordStartupScreen(A);
+	uint32_t tok = t.beginLoad(A);
+	CHECK(t.refusal(A, false, tok) == nullptr);
+	CHECK(t.refusal(nullptr, false, tok) != nullptr); // more than one screen on the stack
+	CHECK(t.refusal(B, false, tok) != nullptr);       // some other single screen
+	CHECK(t.refusal(A, true, tok) != nullptr);        // a screen change is pending
+	CHECK(t.refusal(A, false, 0) != nullptr);         // no token
+	t.accepted(1000, true);
+	CHECK(t.installed() && t.generation() == 1 && t.msSinceFetch(1500) == 500);
+
+	// Retry: the replaced loader's token no longer installs.
+	LoadTracker s;
+	s.recordStartupScreen(A);
+	uint32_t old = s.beginLoad(A), now = s.beginLoad(A);
+	CHECK(s.refusal(A, false, old) != nullptr && s.refusal(A, false, now) == nullptr);
+
+	// Refresh: the pending screen becomes the recorded one only when the reset swap makes it the only screen.
+	t.setPendingScreen(R1);
+	CHECK(t.recordedScreen() == A);                 // nothing swapped yet; old screens still alive
+	CHECK(t.refusal(nullptr, true, tok) != nullptr);
+	t.onStackReset(R1);
+	CHECK(t.recordedScreen() == R1);
+	CHECK(t.refusal(R1, false, tok) != nullptr);    // the startup token is stale for the new screen
+	uint32_t rt = t.beginLoad(R1);
+	CHECK(t.refusal(R1, false, rt) == nullptr);
+	t.accepted(70000, true);
+	CHECK(t.generation() == 2 && t.msSinceFetch(70000) == 0);
+
+	// A reset that is not a refresh (to Home) leaves no recorded screen: nothing can install.
+	t.onStackReset(HOME);
+	CHECK(t.recordedScreen() == nullptr && t.refusal(HOME, false, rt) != nullptr);
+
+	// A pending screen that never got its swap (the reset went elsewhere) is not recorded later by accident.
+	t.setPendingScreen(R2);
+	t.onStackReset(HOME);
+	CHECK(t.recordedScreen() == nullptr);
+
+	// A load started by some other screen invalidates the recorded screen's token.
+	LoadTracker u;
+	u.recordStartupScreen(A);
+	uint32_t ut = u.beginLoad(A);
+	(void)u.beginLoad(B);
+	CHECK(u.refusal(A, false, ut) != nullptr);
+
+	// A catalog served from the SD cache is installed but is not a fetch: the rate-limit clock doesn't move.
+	LoadTracker c;
+	c.recordStartupScreen(A);
+	c.accepted(5000, false);
+	CHECK(c.installed() && c.msSinceFetch(6000) == -1);
+	CHECK(!refreshRateLimited(c.msSinceFetch(6000), kRefreshMinIntervalSec)); // first Refresh really fetches
+	c.accepted(10000, true);
+	c.accepted(20000, false);                       // a later cache install keeps the fetch time
+	CHECK(c.msSinceFetch(30000) == 20000);
+	CHECK(refreshRateLimited(c.msSinceFetch(30000), kRefreshMinIntervalSec));
+
+	// The millisecond clock wraps (SDL ticks are 32-bit).
+	LoadTracker w;
+	w.accepted(0xFFFFFF00u, true);
+	CHECK(w.msSinceFetch(0x100u) == 0x200);
+
+	// Ten refreshes in a row: generation counts every accepted install.
+	LoadTracker g;
+	g.recordStartupScreen(A);
+	g.accepted(0, true);
+	int screens[10];
+	for (int i = 0; i < 10; i++) {
+		g.setPendingScreen(&screens[i]);
+		g.onStackReset(&screens[i]);
+		uint32_t k = g.beginLoad(&screens[i]);
+		CHECK(g.refusal(&screens[i], false, k) == nullptr);
+		g.accepted((uint32_t)(i + 1) * 1000, true);
+	}
+	CHECK(g.generation() == 11);
 }
 
 int main() {
 	testDevOptions();
 	testInstallGuard();
+	testLoadTracker();
+	testRefreshRateLimit();
 	if (failures) { std::printf("core_test: %d failure(s)\n", failures); return 1; }
 	std::printf("core_test: all passed\n");
 	return 0;

@@ -14,10 +14,11 @@ const char* sortLabel(SortMode m) {
 	return "";
 }
 
-// Future in-session refresh: `base` and `apps` hold `const AppEntry*` into App::catalog, which is installed once
-// and never replaced (see App::catalog). For a refreshable catalog, store slugs (or the category and sort mode and
-// rebuild with Catalog::inCategory / search) and resolve them again after a swap, or keep a shared_ptr<const
-// Catalog> snapshot alive for the screen's lifetime.
+// Future in-session refresh: `base` and `apps` hold `const AppEntry*` into App::catalog, which is replaced
+// only while the LoadingScreen is the only screen, so a Refresh destroys this screen first (see App::catalog). A
+// refresh that kept the user's place would store slugs (or the category and sort mode and rebuild with
+// Catalog::inCategory / search) and resolve them again after a swap, or keep a shared_ptr<const Catalog> snapshot
+// alive for the screen's lifetime.
 // Paged list of apps, the way the shop pages through titles.
 class ListScreen : public Screen {
 public:

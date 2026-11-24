@@ -13,10 +13,14 @@
 #     --mock                                      use the compiled-in mock catalog
 #     --offline                                   use the cache only, no network
 #     --refresh                                   ignore the cache TTL
-#     --fail                                      make the first catalog load fail (error screen; Retry works)
+#     --fail[=startup|refresh|both|none]          make the first startup load fail (error screen; Retry works) and/or
+#                                                 every Refresh fail ("Couldn't refresh"); plain --fail = startup.
+#                                                 fail=refresh skips the 60 s rate limit unless --ratelimit is given
+#     --mockdelay[=| ]<ms>                        how long the mock load takes (default 300), to test HOME / B during it
+#     --ratelimit[=| ]<seconds>                   Refresh rate limit (default 60; 0 = off, so every Refresh fetches)
 #     --topbar all                                preview every top-bar action button (fake progress and badge)
 #   On Wii they are written to <app dir>/devstart as key=value lines (env vars don't reach
-#   Dolphin); on PC they are exported as OPENSHOP_START / _MOCK / _OFFLINE / _REFRESH / _FAIL / _TOPBAR.
+#   Dolphin); on PC they are exported as OPENSHOP_START / _MOCK / _OFFLINE / _REFRESH / _FAIL / _TOPBAR / _MOCKDELAY / _RATELIMIT.
 #   Dolphin's virtual SD card is synced with ./sdcard (put bgm.mp3 in sdcard/apps/OpenShop/).
 #   ./sdcard is a symlink to .dolphin/sdcard; .dolphin/ is the only repo dir Dolphin may write to.
 #   ./dev package             build dist/OpenShop.zip for the Homebrew Channel (SD:/apps/OpenShop)
@@ -206,7 +210,9 @@ devstart_text() {
 	(( OPT_MOCK )) && echo "mock=1"
 	(( OPT_OFFLINE )) && echo "offline=1"
 	(( OPT_REFRESH )) && echo "refresh=1"
-	(( OPT_FAIL )) && echo "fail=1"
+	[[ -n "$OPT_FAIL" ]] && echo "fail=$OPT_FAIL"
+	[[ -n "$OPT_MOCKDELAY" ]] && echo "mockdelay=$OPT_MOCKDELAY"
+	[[ -n "$OPT_RATELIMIT" ]] && echo "ratelimit=$OPT_RATELIMIT"
 	[[ -n "$OPT_TOPBAR" ]] && echo "topbar=$OPT_TOPBAR"
 	return 0
 }
@@ -272,7 +278,8 @@ launch_pc() {
 	prepare_sd
 	info "Launching Linux build (Ctrl+C or close window to stop)"
 	OPENSHOP_DATA="$APP_DIR" OPENSHOP_START="$START_SCREEN" OPENSHOP_MOCK="$OPT_MOCK" \
-		OPENSHOP_OFFLINE="$OPT_OFFLINE" OPENSHOP_REFRESH="$OPT_REFRESH" OPENSHOP_FAIL="$OPT_FAIL" OPENSHOP_TOPBAR="$OPT_TOPBAR" ./build-pc/openshop &
+		OPENSHOP_OFFLINE="$OPT_OFFLINE" OPENSHOP_REFRESH="$OPT_REFRESH" OPENSHOP_FAIL="$OPT_FAIL" OPENSHOP_TOPBAR="$OPT_TOPBAR" \
+		OPENSHOP_MOCKDELAY="$OPT_MOCKDELAY" OPENSHOP_RATELIMIT="$OPT_RATELIMIT" ./build-pc/openshop &
 	echo $! > build-pc/.pid
 }
 
@@ -330,7 +337,7 @@ headers() {
 usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; }
 
 cmd="${1:-}"; shift || true
-START_SCREEN=""; OPT_MOCK=0; OPT_OFFLINE=0; OPT_REFRESH=0; OPT_FAIL=0; OPT_TOPBAR=""
+START_SCREEN=""; OPT_MOCK=0; OPT_OFFLINE=0; OPT_REFRESH=0; OPT_FAIL=""; OPT_TOPBAR=""; OPT_MOCKDELAY=""; OPT_RATELIMIT=""
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 		--screen)
@@ -343,7 +350,17 @@ while [[ $# -gt 0 ]]; do
 		--mock)    OPT_MOCK=1; shift ;;
 		--offline) OPT_OFFLINE=1; shift ;;
 		--refresh) OPT_REFRESH=1; shift ;;
-		--fail)    OPT_FAIL=1; shift ;;
+		--fail)
+			# Plain --fail means startup; "--fail refresh" (space form) takes the next word only if it is a value.
+			case "${2:-}" in startup|refresh|both|none|0|1) OPT_FAIL="$2"; shift 2 ;; *) OPT_FAIL=startup; shift ;; esac ;;
+		--fail=*)
+			OPT_FAIL="${1#--fail=}"
+			case "$OPT_FAIL" in startup|refresh|both|none|0|1) ;; *) err "--fail: use startup, refresh, both or none"; exit 1 ;; esac
+			shift ;;
+		--mockdelay|--ratelimit|--mockdelay=*|--ratelimit=*)
+			if [[ "$1" == *=* ]]; then name="${1%%=*}"; val="${1#*=}"; shift; else name="$1"; val="${2:-}"; shift $(( $# > 1 ? 2 : 1 )); fi
+			[[ "$val" =~ ^[0-9]{1,7}$ ]] || { err "$name: needs a number"; exit 1; }
+			if [[ "$name" == --mockdelay ]]; then OPT_MOCKDELAY="$val"; else OPT_RATELIMIT="$val"; fi ;;
 		--topbar|--topbar=*)
 			if [[ "$1" == --topbar=* ]]; then OPT_TOPBAR="${1#--topbar=}"; shift; else OPT_TOPBAR="${2:-}"; shift $(( $# > 1 ? 2 : 1 )); fi
 			[[ "$OPT_TOPBAR" == all ]] || { err "--topbar: only 'all' is supported"; exit 1; } ;;

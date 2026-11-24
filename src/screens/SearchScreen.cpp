@@ -11,10 +11,10 @@ namespace {
 const char* const kRows[] = {"1234567890", "qwertyuiop", "asdfghjkl'", "zxcvbnm-.+"};
 constexpr size_t kMaxQuery = 40;
 
-// Future in-session refresh: `results` holds `const AppEntry*` into App::catalog, which is installed once and
-// never replaced (see App::catalog). If the catalog could ever be refreshed in-session, re-run the query
-// (`app.catalog.search(query)`) after the swap instead of keeping these pointers, or hold a
-// shared_ptr<const Catalog> snapshot.
+// Future in-session refresh: `results` holds `const AppEntry*` into App::catalog, which is replaced
+// only while the LoadingScreen is the only screen, so a Refresh destroys this screen first (see App::catalog). A
+// refresh that kept the user's place would re-run the query (`app.catalog.search(query)`) after the swap instead
+// of keeping these pointers, or hold a shared_ptr<const Catalog> snapshot.
 // Search with an on-screen keyboard (pointer or D-pad); USB / PC keyboards type directly.
 class SearchScreen : public Screen {
 public:

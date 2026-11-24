@@ -7,7 +7,20 @@
 namespace {
 class HomeScreen : public Screen {
 public:
+	explicit HomeScreen(std::optional<RefreshNotice> notice) : notice_(std::move(notice)) {}
+
 	void draw(App& app, Ui& ui) override {
+		// A failed Refresh lands here: the dialog can't be shown before the reset (the swap drops dialogs), so
+		// Home shows it once the fade-in has finished. It waits one more input-enabled frame: on the first one the
+		// modal depth was still 0, so a press in that same frame could otherwise reach Home under the new dialog.
+		if (notice_ && ui.inputEnabled && !app.dialogOpen() && settled_++ >= 1) {
+			Dialog d;
+			d.title = "Couldn't refresh";
+			d.message = notice_->reason + "\nShowing the catalog from " + notice_->fetchedAt + ".";
+			d.primaryIndex = 0;
+			app.showDialog(std::move(d));
+			notice_.reset();
+		}
 		float W = (float)ui.g.width(), H = (float)ui.g.height();
 		const float m = theme::margin;
 		float top = theme::topBarH + 18, bottom = H - theme::bottomBarH - 16;
@@ -17,8 +30,10 @@ public:
 		// Left column: featured app + quick actions.
 		float lw = std::round(W * 0.40f);
 		Rect feat{m, top, lw, 186};
-		// Future in-session refresh: `f` is only used within this frame (and handed to Detail, see there), so a
-		// replaced catalog would be picked up automatically here; only the pushed screens keep references.
+		// Future in-session refresh: the catalog is replaced only while the LoadingScreen is the only screen, so
+		// this Home (like every holder of an AppEntry pointer) is destroyed first. `f` is only used within this
+		// frame (and handed to Detail, see there), so a refresh that kept Home alive would pick up the new catalog
+		// automatically; only the pushed screens keep references.
 		if (const AppEntry* f = app.catalog.featured()) {
 			Id id = makeId("home:featured");
 			if (ui.item(id, feat)) app.push(makeDetailScreen(*f));
@@ -79,6 +94,9 @@ public:
 	}
 
 private:
+	std::optional<RefreshNotice> notice_;
+	int settled_ = 0; // input-enabled frames seen while a notice waits
+
 	void drawTile(App& app, Ui& ui, Rect r, float hov, const std::string& cat, const std::string& label) {
 		drawCard(ui, r, hov, 16);
 		Rect g = r.inset(-2.5f * hov);
@@ -106,4 +124,6 @@ private:
 };
 } // namespace
 
-std::unique_ptr<Screen> makeHomeScreen() { return std::make_unique<HomeScreen>(); }
+std::unique_ptr<Screen> makeHomeScreen(std::optional<RefreshNotice> notice) {
+	return std::make_unique<HomeScreen>(std::move(notice));
+}

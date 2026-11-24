@@ -47,7 +47,7 @@ $(TESTBIN): tests/catalog_test.cpp src/catalog/Catalog.cpp src/catalog/MockCatal
 
 CORETEST := $(BUILD)/tests/core_test
 
-$(CORETEST): tests/core_test.cpp src/core/DevOptions.cpp src/core/DevOptions.h src/catalog/InstallGuard.h
+$(CORETEST): tests/core_test.cpp src/core/DevOptions.cpp src/core/DevOptions.h src/catalog/InstallGuard.h src/catalog/RefreshPolicy.h src/catalog/LoadTracker.h
 	@mkdir -p $(dir $@)
 	$(CXX) $(TESTCXX) -o $@ tests/core_test.cpp src/core/DevOptions.cpp
 

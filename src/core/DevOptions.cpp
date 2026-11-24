@@ -13,6 +13,17 @@ bool truthy(const std::string& v) {
 	return !v.empty() && v != "0" && v != "false" && v != "no" && v != "off";
 }
 
+// A non-negative integer, or -1 (use the default) for anything else.
+int parseNonNegative(const std::string& v) {
+	if (v.empty() || v.size() > 7) return -1;
+	int n = 0;
+	for (char c : v) {
+		if (c < '0' || c > '9') return -1;
+		n = n * 10 + (c - '0');
+	}
+	return n;
+}
+
 // Plain stdio and getenv (no SDL or platform layer) so the host tests can link this file on its own.
 bool readSmallFile(const std::string& path, std::string& out) {
 	std::FILE* f = std::fopen(path.c_str(), "rb");
@@ -24,6 +35,14 @@ bool readSmallFile(const std::string& path, std::string& out) {
 	return true;
 }
 } // namespace
+
+void DevOptions::parseFail(const std::string& val, DevOptions& o) {
+	o.failStartup = o.failRefresh = false;
+	if (val == "refresh") o.failRefresh = true;
+	else if (val == "both") o.failStartup = o.failRefresh = true;
+	else if (val == "none") return;
+	else o.failStartup = truthy(val); // "startup", "1" and any other truthy value
+}
 
 void DevOptions::parseFile(const std::string& text, DevOptions& o) {
 	size_t pos = 0;
@@ -40,7 +59,9 @@ void DevOptions::parseFile(const std::string& text, DevOptions& o) {
 		else if (key == "mock") o.mock = truthy(val);
 		else if (key == "offline") o.offline = truthy(val);
 		else if (key == "refresh") o.refresh = truthy(val);
-		else if (key == "fail") o.fail = truthy(val);
+		else if (key == "fail") parseFail(val, o);
+		else if (key == "mockdelay") o.mockDelayMs = parseNonNegative(val);
+		else if (key == "ratelimit") o.rateLimitSec = parseNonNegative(val);
 		else if (key == "topbar") o.topbarAll = val == "all";
 	}
 }
@@ -53,13 +74,17 @@ DevOptions DevOptions::load(const std::string& dataDir) {
 	if (const char* v = std::getenv("OPENSHOP_MOCK"); v && *v) o.mock = truthy(v);
 	if (const char* v = std::getenv("OPENSHOP_OFFLINE"); v && *v) o.offline = truthy(v);
 	if (const char* v = std::getenv("OPENSHOP_REFRESH"); v && *v) o.refresh = truthy(v);
-	if (const char* v = std::getenv("OPENSHOP_FAIL"); v && *v) o.fail = truthy(v);
+	if (const char* v = std::getenv("OPENSHOP_FAIL"); v && *v) parseFail(v, o);
+	if (const char* v = std::getenv("OPENSHOP_MOCKDELAY"); v && *v) o.mockDelayMs = parseNonNegative(v);
+	if (const char* v = std::getenv("OPENSHOP_RATELIMIT"); v && *v) o.rateLimitSec = parseNonNegative(v);
 	if (const char* v = std::getenv("OPENSHOP_TOPBAR"); v && *v) o.topbarAll = std::string(v) == "all";
 	return o;
 }
 
 std::string DevOptions::describe() const {
+	const char* failText = failStartup && failRefresh ? "both" : failStartup ? "startup" : failRefresh ? "refresh" : "none";
 	return "screen=" + (screen.empty() ? std::string("(none)") : screen) + " mock=" + (mock ? "1" : "0") +
-	       " offline=" + (offline ? "1" : "0") + " refresh=" + (refresh ? "1" : "0") + " fail=" + (fail ? "1" : "0") +
-	       " topbar=" + (topbarAll ? "all" : "default");
+	       " offline=" + (offline ? "1" : "0") + " refresh=" + (refresh ? "1" : "0") + " fail=" + failText +
+	       " topbar=" + (topbarAll ? "all" : "default") + " mockdelay=" + std::to_string(mockDelayMs) +
+	       " ratelimit=" + std::to_string(rateLimitSec);
 }

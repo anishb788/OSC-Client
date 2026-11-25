@@ -3,6 +3,7 @@
 #include "gfx/Theme.h"
 #include "platform/Platform.h"
 #include "ui/HomeLayout.h"
+#include "ui/TopBarLayout.h"
 #include "ui/Widgets.h"
 
 namespace {
@@ -27,7 +28,12 @@ public:
 		const homelayout::Layout L = homelayout::layout(W, H, m, theme::bottomBarH);
 		auto R = [](const homelayout::Box& b) { return Rect{b.x, b.y, b.w, b.h}; };
 
-		app.topBar(ui, "OpenShop", "Open Shop Channel client");
+		// Offline (a cache read because the network failed, or the offline option): the chip takes the subtitle's place
+		// in the top bar. That spot is clear of the capsules (the chip is kept left of where all three would sit), of
+		// the left column and of the bottom bar's hint and credit.
+		const bool offline = app.catalog.offline;
+		app.topBar(ui, "OpenShop", offline ? std::string_view() : std::string_view("Open Shop Channel client"));
+		if (offline) drawOfflineChip(ui, W, app.catalog.fetchedAt);
 
 		// Left column: featured app + quick actions.
 		Rect feat = R(L.featured);
@@ -101,6 +107,17 @@ public:
 	}
 
 private:
+	static void drawOfflineChip(Ui& ui, float W, int64_t fetchedAt) {
+		const float x = theme::margin + ui.t.width(Font::Bold, 24, "OpenShop") + 16;
+		// The room left of the top-bar capsules, counted for all three (M3 and M4 add Downloads and Settings).
+		const float right = W - theme::margin - 3 * topbar::kCapW - 2 * topbar::kGap - topbar::kTitleGap;
+		// The same local date and time as the "Couldn't refresh" message (fetchedAt is a moment, not a calendar day, so
+		// formatDate's UTC day would be wrong near midnight).
+		std::string label = fetchedAt > 0 ? "Offline: catalog from " + formatDateTime(fetchedAt) : "Offline: saved catalog";
+		if (x + chipWidth(ui, label, /*hasIcon=*/true) > right) label = "Offline";
+		drawChip(ui, x, (theme::topBarH - 3) / 2 - 11, label, theme::warn, Icon::Warning);
+	}
+
 	std::optional<RefreshNotice> notice_;
 	int settled_ = 0; // input-enabled frames seen while a notice waits
 

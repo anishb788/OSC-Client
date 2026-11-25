@@ -109,10 +109,19 @@ void drawAppIcon(Ui& ui, const AppEntry& app, Rect r) {
 	ui.t.drawIn(Font::Bold, size, app.name, r.inset(r.h * 0.18f, 0), theme::white, Align::Center);
 }
 
+namespace {
+constexpr int kChipFont = 13;
+constexpr float kChipPad = 9, kChipIconW = 14, kChipIconGap = 5;
+} // namespace
+
+float chipWidth(Ui& ui, std::string_view label, bool hasIcon) {
+	return kChipPad * 2 + (hasIcon ? kChipIconW + kChipIconGap : 0) + ui.t.width(Font::Bold, kChipFont, label);
+}
+
 float drawChip(Ui& ui, float x, float y, std::string_view label, Color c, std::optional<Icon> icon) {
-	const int fs = 13;
-	float h = 22, iconW = icon ? 14 : 0, pad = 9;
-	float w = pad * 2 + iconW + (icon ? 5 : 0) + ui.t.width(Font::Bold, fs, label);
+	const int fs = kChipFont;
+	float h = 22, iconW = icon ? kChipIconW : 0, pad = kChipPad;
+	float w = chipWidth(ui, label, icon.has_value());
 	ui.g.fillRoundRect({x, y, w, h}, h / 2, c.withAlpha(0.16f));
 	float tx = x + pad;
 	if (icon) { ui.g.icon(*icon, {tx, y + 4, iconW, iconW}, c); tx += iconW + 5; }

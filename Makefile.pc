@@ -72,19 +72,19 @@ $(LAYOUTTEST): tests/layout_test.cpp src/ui/HomeLayout.h
 
 HTTPPARSETEST := $(BUILD)/tests/http_parse_test
 
-$(HTTPPARSETEST): tests/http_parse_test.cpp src/net/HttpParse.cpp src/net/HttpParse.h src/net/Http.h src/net/Sinks.cpp src/core/Version.h
+$(HTTPPARSETEST): tests/http_parse_test.cpp src/net/HttpParse.cpp src/net/HttpParse.h src/net/Http.h src/net/Sinks.cpp src/core/FileUtil.cpp src/core/FileUtil.h src/core/Version.h
 	@mkdir -p $(dir $@)
-	$(CXX) $(TESTCXX) -o $@ tests/http_parse_test.cpp src/net/HttpParse.cpp src/net/Sinks.cpp
+	$(CXX) $(TESTCXX) -o $@ tests/http_parse_test.cpp src/net/HttpParse.cpp src/net/Sinks.cpp src/core/FileUtil.cpp
 
 HTTPTRANSFERTEST := $(BUILD)/tests/http_transfer_test
 
-$(HTTPTRANSFERTEST): tests/http_transfer_test.cpp tests/FakeTransport.h src/net/HttpTransfer.cpp src/net/HttpTransfer.h src/net/Transport.h src/net/HttpParse.cpp src/net/HttpParse.h src/net/Http.h src/net/Sinks.cpp src/core/Log.h src/core/Version.h
+$(HTTPTRANSFERTEST): tests/http_transfer_test.cpp tests/FakeTransport.h src/net/HttpTransfer.cpp src/net/HttpTransfer.h src/net/Transport.h src/net/HttpParse.cpp src/net/HttpParse.h src/net/Http.h src/net/Sinks.cpp src/core/FileUtil.cpp src/core/FileUtil.h src/core/Log.h src/core/Version.h
 	@mkdir -p $(dir $@)
-	$(CXX) $(TESTCXX) -Itests -o $@ tests/http_transfer_test.cpp src/net/HttpTransfer.cpp src/net/HttpParse.cpp src/net/Sinks.cpp
+	$(CXX) $(TESTCXX) -Itests -o $@ tests/http_transfer_test.cpp src/net/HttpTransfer.cpp src/net/HttpParse.cpp src/net/Sinks.cpp src/core/FileUtil.cpp
 
 # Real sockets over loopback (a server thread inside the test), so -pthread. No SDL.
 HTTPPOSIXTEST := $(BUILD)/tests/http_posix_test
-NETSRCS := src/net/HttpTransfer.cpp src/net/HttpPosix.cpp src/net/HttpParse.cpp src/net/Sinks.cpp
+NETSRCS := src/net/HttpTransfer.cpp src/net/HttpPosix.cpp src/net/HttpParse.cpp src/net/Sinks.cpp src/core/FileUtil.cpp
 NETDEPS := $(NETSRCS) src/net/HttpTransfer.h src/net/HttpPosix.h src/net/Transport.h src/net/HttpParse.h src/net/Http.h src/core/Log.h src/core/Version.h tests/LoopbackServer.h
 
 $(HTTPPOSIXTEST): tests/http_posix_test.cpp $(NETDEPS)
@@ -115,9 +115,16 @@ $(OSCAPITEST): tests/oscapi_test.cpp src/catalog/OscApi.cpp src/catalog/OscApi.h
 # The live catalog loader against the loopback server (real fixtures) and FakeTransport. Reads tests/fixtures/.
 NETLOADERTEST := $(BUILD)/tests/netloader_test
 
-$(NETLOADERTEST): tests/netloader_test.cpp src/catalog/NetLoader.cpp src/catalog/NetLoader.h src/catalog/CatalogLoader.h src/catalog/CatalogLoader.cpp src/catalog/MockLoader.cpp src/catalog/MockCatalog.cpp src/core/DevOptions.cpp src/catalog/OscApi.cpp src/catalog/OscApi.h src/catalog/Catalog.cpp src/catalog/Catalog.h src/net/Worker.cpp src/net/Worker.h tests/FakeTransport.h $(NETDEPS) $(wildcard tests/fixtures/*)
+$(NETLOADERTEST): tests/netloader_test.cpp src/catalog/NetLoader.cpp src/catalog/NetLoader.h src/catalog/CatalogLoader.h src/catalog/CatalogLoader.cpp src/catalog/MockLoader.cpp src/catalog/MockCatalog.cpp src/core/DevOptions.cpp src/catalog/OscApi.cpp src/catalog/OscApi.h src/catalog/CatalogCache.cpp src/catalog/CatalogCache.h src/catalog/Catalog.cpp src/catalog/Catalog.h src/net/Worker.cpp src/net/Worker.h tests/FakeTransport.h $(NETDEPS) $(wildcard tests/fixtures/*)
 	@mkdir -p $(dir $@)
-	$(CXX) $(TESTCXX) -Itests -pthread $(shell pkg-config --cflags sdl2 jansson) -o $@ tests/netloader_test.cpp src/catalog/NetLoader.cpp src/catalog/CatalogLoader.cpp src/catalog/MockLoader.cpp src/catalog/MockCatalog.cpp src/core/DevOptions.cpp src/catalog/OscApi.cpp src/catalog/Catalog.cpp src/net/Worker.cpp $(NETSRCS) $(shell pkg-config --libs sdl2 jansson)
+	$(CXX) $(TESTCXX) -Itests -pthread $(shell pkg-config --cflags sdl2 jansson) -o $@ tests/netloader_test.cpp src/catalog/NetLoader.cpp src/catalog/CatalogLoader.cpp src/catalog/MockLoader.cpp src/catalog/MockCatalog.cpp src/core/DevOptions.cpp src/catalog/OscApi.cpp src/catalog/CatalogCache.cpp src/catalog/Catalog.cpp src/net/Worker.cpp $(NETSRCS) $(shell pkg-config --libs sdl2 jansson)
+
+# The catalog cache: manifest, atomic multi-file writes, TTL decisions. Reads tests/fixtures/ too. No SDL.
+CACHETEST := $(BUILD)/tests/cache_test
+
+$(CACHETEST): tests/cache_test.cpp src/catalog/CatalogCache.cpp src/catalog/CatalogCache.h src/core/FileUtil.cpp src/core/FileUtil.h src/catalog/OscApi.cpp src/catalog/OscApi.h src/catalog/Catalog.cpp src/catalog/Catalog.h src/core/Log.h $(wildcard tests/fixtures/*)
+	@mkdir -p $(dir $@)
+	$(CXX) $(TESTCXX) $(shell pkg-config --cflags jansson) -o $@ tests/cache_test.cpp src/catalog/CatalogCache.cpp src/core/FileUtil.cpp src/catalog/OscApi.cpp src/catalog/Catalog.cpp $(shell pkg-config --libs jansson)
 
 # Word wrapping (header only, fake font).
 WRAPTEST := $(BUILD)/tests/wrap_test
@@ -140,7 +147,7 @@ $(GFXTEST): tests/gfx_test.cpp src/gfx/Gfx.cpp src/gfx/Gfx.h src/gfx/Theme.h src
 	@mkdir -p $(dir $@)
 	$(CXX) $(TESTCXX) $(shell pkg-config --cflags sdl2) -o $@ tests/gfx_test.cpp src/gfx/Gfx.cpp $(shell pkg-config --libs sdl2) -lm
 
-test: $(TESTBIN) $(CORETEST) $(TOPBARTEST) $(LAYOUTTEST) $(HTTPPARSETEST) $(HTTPTRANSFERTEST) $(HTTPPOSIXTEST) $(WORKERTEST) $(NETTESTTEST) $(OSCAPITEST) $(NETLOADERTEST) $(WRAPTEST) $(HTTPGET) $(GFXTEST)
+test: $(TESTBIN) $(CORETEST) $(TOPBARTEST) $(LAYOUTTEST) $(HTTPPARSETEST) $(HTTPTRANSFERTEST) $(HTTPPOSIXTEST) $(WORKERTEST) $(NETTESTTEST) $(OSCAPITEST) $(NETLOADERTEST) $(CACHETEST) $(WRAPTEST) $(HTTPGET) $(GFXTEST)
 	$(TESTBIN)
 	$(CORETEST)
 	$(TOPBARTEST)
@@ -152,6 +159,7 @@ test: $(TESTBIN) $(CORETEST) $(TOPBARTEST) $(LAYOUTTEST) $(HTTPPARSETEST) $(HTTP
 	$(NETTESTTEST)
 	$(OSCAPITEST)
 	$(NETLOADERTEST)
+	$(CACHETEST)
 	$(WRAPTEST)
 	$(GFXTEST)
 

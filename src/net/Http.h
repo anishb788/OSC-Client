@@ -11,6 +11,8 @@
 #include <utility>
 #include <vector>
 
+#include "core/FileUtil.h"
+
 enum class HttpError {
 	None,
 	NoNetwork,    // the console has no usable network connection
@@ -92,14 +94,6 @@ private:
 	HttpError failure_ = HttpError::Io;
 	bool finished_ = false;
 	bool ok_ = false;
-};
-
-// Filesystem calls FileSink::commit() makes, replaceable so tests can force the failure paths. A null member means the
-// real call (std::rename, std::remove, stat).
-struct FileOps {
-	int (*rename)(const char* from, const char* to) = nullptr;
-	int (*remove)(const char* path) = nullptr;
-	bool (*exists)(const char* path) = nullptr;
 };
 
 // Writes the body to "<path>.tmp" through a fixed 64 KB stdio buffer. After a successful transfer commit() renames the

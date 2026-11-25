@@ -10,6 +10,7 @@ LoaderOptions LoaderOptions::from(const DevOptions& o) {
 	l.mock = o.mock;
 	l.offline = o.offline;
 	l.ignoreTtl = o.refresh;
+	l.cacheTtlSec = o.cacheTtlSec;
 	l.failStartup = o.failStartup;
 	l.failRefresh = o.failRefresh;
 	l.mockDelayMs = o.mockDelayMs;
@@ -25,11 +26,15 @@ std::unique_ptr<CatalogLoader> makeCatalogLoader(const LoaderOptions& opts, int 
 	const bool fail = opts.failing() && (opts.mode == LoaderOptions::Mode::Refresh || attempt == 0);
 	// The fail hook never reaches the network, and a failure never falls back to mock data: only `mock` asks for it.
 	if (opts.mock || fail) return makeMockLoader(fail, delay);
-	// Increment 10 puts the cache in front of this: Startup uses a fresh cache, Refresh ignores the TTL and has no
-	// stale-cache fallback. Until then both modes fetch, and offline (cache only) has nothing to read.
-	if (opts.offline) return makeFailedLoader("Offline mode is on (the offline dev option) and there is no cached catalog yet.");
 	NetLoaderConfig cfg;
 	cfg.baseUrl = opts.apiBase.empty() ? oscapi::kBaseUrl : opts.apiBase;
-	LOG("Catalog: %s load from %s", opts.mode == LoaderOptions::Mode::Refresh ? "refresh" : "startup", cfg.baseUrl.c_str());
+	cfg.cacheDir = opts.cacheDir;
+	cfg.refreshMode = opts.mode == LoaderOptions::Mode::Refresh;
+	cfg.offline = opts.offline;
+	cfg.ignoreTtl = opts.ignoreTtl;
+	if (opts.cacheTtlSec >= 0) cfg.ttlSec = opts.cacheTtlSec;
+	// Startup uses a fresh cache and falls back to a stale one; Refresh ignores the TTL and has no stale fallback;
+	// offline reads the cache only. That is catcache::decideSource, run by the job on the worker thread.
+	LOG("Catalog: %s load from %s%s", cfg.refreshMode ? "refresh" : "startup", cfg.baseUrl.c_str(), opts.offline ? " (offline)" : "");
 	return makeNetworkLoader(opts.worker, cfg);
 }

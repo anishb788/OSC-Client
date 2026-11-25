@@ -48,6 +48,10 @@ static void testDevOptions() {
 	CHECK(parse("ratelimit=0\n").rateLimitSec == 0);
 	CHECK(parse("ratelimit=15\n").rateLimitSec == 15);
 	CHECK(parse("ratelimit=\n").rateLimitSec == -1);
+	// cachettl=: the catalog cache TTL in seconds (0 = always stale); anything else keeps the built-in 1 h (-1).
+	CHECK(parse("").cacheTtlSec == -1 && parse("cachettl=0\n").cacheTtlSec == 0 && parse("cachettl=90\n").cacheTtlSec == 90);
+	CHECK(parse("cachettl=x\n").cacheTtlSec == -1 && parse("cachettl=-1\n").cacheTtlSec == -1);
+	CHECK(parse("cachettl=90\n").describe().find(" cachettl=90") != std::string::npos && parse("").describe().find("cachettl") == std::string::npos);
 
 	// CRLF, spaces, comments, unknown keys, bare screen name (old format), last value wins.
 	o = parse("# comment\r\n  screen = list \r\nunknown=1\r\noffline=1\r\nrefresh=1\r\n");

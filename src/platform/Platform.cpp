@@ -4,6 +4,7 @@
 
 #include <cstdio>
 
+#include "core/FileUtil.h"
 #include "core/Log.h"
 
 #ifdef __wii__
@@ -48,26 +49,16 @@ void finishFrame(Input& in, uint32_t held, float dt, uint32_t downEvents = 0) {
 const std::string& dataDir() { return gDataDir; }
 
 bool writeFile(const std::string& path, const std::string& data) {
-	FILE* f = std::fopen(path.c_str(), "wb");
-	if (!f) {
-		LOG("writeFile: cannot open %s", path.c_str());
-		return false;
-	}
-	bool ok = data.empty() || std::fwrite(data.data(), 1, data.size(), f) == data.size();
-	if (std::fclose(f) != 0) ok = false;
-	if (!ok) LOG("writeFile: write failed for %s", path.c_str());
-	return ok;
+	// Atomic: a tmp file, then a commit that survives libfat's no-rename-over-existing rule (see FileUtil.h).
+	if (writeFileAtomic(path, data)) return true;
+	LOG("writeFile: failed for %s", path.c_str());
+	return false;
 }
 
-bool readFile(const std::string& path, std::string& out) {
-	out.clear();
-	FILE* f = std::fopen(path.c_str(), "rb");
-	if (!f) return false;
-	char buf[1024];
-	size_t n;
-	while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) out.append(buf, n);
-	std::fclose(f);
-	return true;
+bool readFile(const std::string& path, std::string& out, size_t maxBytes) {
+	ReadStatus rs = readFileCapped(path, out, maxBytes);
+	if (rs == ReadStatus::TooLarge) LOG("readFile: %s is larger than %zu bytes, not read", path.c_str(), maxBytes);
+	return rs == ReadStatus::Ok;
 }
 
 #ifdef __wii__

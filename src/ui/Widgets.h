@@ -39,6 +39,8 @@ bool arrowButton(Ui& ui, Id id, Rect r, Icon dir, int iconFontSize = 18);
 // Placeholder app icon (real 128x48 PNG icons arrive with the live catalog).
 void drawAppIcon(Ui& ui, const AppEntry& app, Rect r);
 
+// The width drawChip will draw `label` at (with or without an icon), so a caller can fit it before drawing.
+float chipWidth(Ui& ui, std::string_view label, bool hasIcon = false);
 // Small rounded label; returns its width.
 float drawChip(Ui& ui, float x, float y, std::string_view label, Color c, std::optional<Icon> icon = std::nullopt);
 

@@ -5,17 +5,17 @@
 //
 // Sources, highest priority first:
 //   1. Environment (PC build, set by `./dev`): OPENSHOP_START, OPENSHOP_MOCK, OPENSHOP_OFFLINE,
-//      OPENSHOP_REFRESH, OPENSHOP_FAIL, OPENSHOP_TOPBAR, OPENSHOP_MOCKDELAY, OPENSHOP_RATELIMIT, OPENSHOP_API, OPENSHOP_AUTOREFRESH, OPENSHOP_PERF, OPENSHOP_NETTEST, OPENSHOP_NETTESTBG, OPENSHOP_NETTESTQUIT. An empty variable is ignored. On/off flags
+//      OPENSHOP_REFRESH, OPENSHOP_FAIL, OPENSHOP_TOPBAR, OPENSHOP_MOCKDELAY, OPENSHOP_RATELIMIT, OPENSHOP_CACHETTL, OPENSHOP_API, OPENSHOP_AUTOREFRESH, OPENSHOP_PERF, OPENSHOP_NETTEST, OPENSHOP_NETTESTBG, OPENSHOP_NETTESTQUIT. An empty variable is ignored. On/off flags
 //      (mock, offline, refresh) are on unless the value is "0", "false", "no" or "off"; fail, topbar, mockdelay
 //      and ratelimit take the values described next to their fields.
 //   2. <dataDir>/devstart (Wii, written by `./dev`; env vars don't reach Dolphin): one key=value
-//      per line with keys screen, mock, offline, refresh, fail, topbar, mockdelay, ratelimit, api, autorefresh, perf, nettest, nettestbg, nettestquit. A line without '=' is a bare screen name
+//      per line with keys screen, mock, offline, refresh, fail, topbar, mockdelay, ratelimit, cachettl, api, autorefresh, perf, nettest, nettestbg, nettestquit. A line without '=' is a bare screen name
 //      (the old one-line format).
 struct DevOptions {
 	std::string screen; // "" = normal start
 	bool mock = false;    // use the compiled-in mock catalog (acts from Increment 9)
-	bool offline = false; // cache only, no network (acts from Increment 10)
-	bool refresh = false; // ignore the cache TTL on startup too (acts from Increment 10; LoaderOptions::ignoreTtl)
+	bool offline = false; // cache only, no network; an error if there is no usable cache (Increment 10)
+	bool refresh = false; // ignore the cache TTL on startup too (LoaderOptions::ignoreTtl; a stale fallback still applies)
 	// fail=startup|refresh|both (also "1" and any other truthy value, meaning startup; "0", "" and "none" mean
 	// neither): the first startup load fails (error screen; Retry then succeeds) and/or every Refresh fails.
 	bool failStartup = false;
@@ -26,6 +26,9 @@ struct DevOptions {
 	// ratelimit=<seconds>: overrides the 60 s Refresh rate limit (0 = never limited). -1 = the built-in default (60,
 	// or 0 when fail=refresh is set, so that hook can fire straight after startup).
 	int rateLimitSec = -1;
+
+	// cachettl=<seconds>: replaces the 1 h catalog cache TTL (0 = the cache is always stale). -1 = the built-in TTL.
+	int cacheTtlSec = -1;
 
 	// api=<base url>: replaces the OSC API base (http://hbb1.oscwii.org/api/v4) for the catalog fetch, e.g. a dead port
 	// to see the error screen or tools/http_test_server.py to see "bad data". Empty = the real server.

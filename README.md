@@ -38,7 +38,7 @@ the real catalog. Downloading and installing apps isn't implemented yet.
 ./dev watch              # Wii build in Dolphin, rebuilt and relaunched on every save
 ./dev watch-pc           # native Linux build, the fastest way to iterate on UI
 ./dev run --screen detail   # start on a screen: home, search, list, detail, dialog
-./dev pc --mock --offline --refresh   # dev options (parsed now, acted on in later milestone 2 steps)
+./dev pc --mock --offline --refresh   # dev options (see the header of ./dev)
 ./dev package            # dist/OpenShop.zip for the Homebrew Channel
 ```
 

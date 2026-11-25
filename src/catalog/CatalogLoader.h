@@ -38,10 +38,12 @@ struct LoaderOptions {
 	enum class Mode { Startup, Refresh };
 
 	bool mock = false;    // compiled-in mock data instead of the network
-	bool offline = false; // cache only (Increment 10; until then it fails with a clear message)
-	// Dev option `refresh=1`: ignore the cache TTL on startup too (Increment 10). Not the same as Mode::Refresh, which
-	// always ignores the TTL and never falls back to a stale cache.
+	bool offline = false; // cache only, never the network; an error if there is no usable cache
+	// Dev option `refresh=1`: ignore the cache TTL on startup too. Not the same as Mode::Refresh, which always ignores
+	// the TTL and never falls back to a stale cache.
 	bool ignoreTtl = false;
+	int cacheTtlSec = -1;     // dev option `cachettl=`: replaces the 1 h catalog TTL (-1 = the built-in one)
+	std::string cacheDir;     // <dataDir>/cache (set by App, not by from()); empty = no cache
 	bool failStartup = false; // dev hook: the first startup attempt fails, retries succeed
 	bool failRefresh = false; // dev hook: every refresh fails
 	int mockDelayMs = -1;     // dev hook: artificial mock delay (-1 = default)

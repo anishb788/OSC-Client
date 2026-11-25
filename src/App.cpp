@@ -65,6 +65,7 @@ bool App::init(int argc, char** argv) {
 
 	LoaderOptions startup = LoaderOptions::from(opts);
 	startup.worker = &worker_;
+	startup.cacheDir = platform::dataDir() + "/cache";
 	auto loading = makeLoadingScreen(startup);
 	loads.recordStartupScreen(loading.get());
 	stack.push_back(std::move(loading));
@@ -155,6 +156,7 @@ bool App::refreshCatalog() {
 	LoaderOptions lo = LoaderOptions::from(opts);
 	lo.mode = LoaderOptions::Mode::Refresh;
 	lo.worker = &worker_;
+	lo.cacheDir = platform::dataDir() + "/cache";
 	int limit = opts.rateLimitSec >= 0 ? opts.rateLimitSec : kRefreshMinIntervalSec;
 	// The fail=refresh dev hook would never fire inside the first minute otherwise; an explicit ratelimit= wins.
 	if (opts.failRefresh && opts.rateLimitSec < 0) limit = 0;

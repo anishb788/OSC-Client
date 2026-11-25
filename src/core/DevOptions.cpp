@@ -68,6 +68,7 @@ void DevOptions::parseFile(const std::string& text, DevOptions& o) {
 		else if (key == "fail") parseFail(val, o);
 		else if (key == "mockdelay") o.mockDelayMs = parseNonNegative(val);
 		else if (key == "ratelimit") o.rateLimitSec = parseNonNegative(val);
+		else if (key == "cachettl") o.cacheTtlSec = parseNonNegative(val);
 		else if (key == "autorefresh") o.autoRefreshMs = parseNonNegative(val);
 		else if (key == "api") o.apiBase = cleanApiBase(val);
 		else if (key == "topbar") o.topbarAll = val == "all";
@@ -89,6 +90,7 @@ DevOptions DevOptions::load(const std::string& dataDir) {
 	if (const char* v = std::getenv("OPENSHOP_FAIL"); v && *v) parseFail(v, o);
 	if (const char* v = std::getenv("OPENSHOP_MOCKDELAY"); v && *v) o.mockDelayMs = parseNonNegative(v);
 	if (const char* v = std::getenv("OPENSHOP_RATELIMIT"); v && *v) o.rateLimitSec = parseNonNegative(v);
+	if (const char* v = std::getenv("OPENSHOP_CACHETTL"); v && *v) o.cacheTtlSec = parseNonNegative(v);
 	if (const char* v = std::getenv("OPENSHOP_AUTOREFRESH"); v && *v) o.autoRefreshMs = parseNonNegative(v);
 	if (const char* v = std::getenv("OPENSHOP_API"); v && *v) o.apiBase = cleanApiBase(v);
 	if (const char* v = std::getenv("OPENSHOP_TOPBAR"); v && *v) o.topbarAll = std::string(v) == "all";
@@ -105,6 +107,7 @@ std::string DevOptions::describe() const {
 	       " offline=" + (offline ? "1" : "0") + " refresh=" + (refresh ? "1" : "0") + " fail=" + failText +
 	       " topbar=" + (topbarAll ? "all" : "default") + " mockdelay=" + std::to_string(mockDelayMs) +
 	       " ratelimit=" + std::to_string(rateLimitSec) + " perf=" + (perf ? "1" : "0") +
+	       (cacheTtlSec < 0 ? std::string() : " cachettl=" + std::to_string(cacheTtlSec)) +
 	       (apiBase.empty() ? std::string() : " api=" + apiBase) +
 	       (autoRefreshMs < 0 ? std::string() : " autorefresh=" + std::to_string(autoRefreshMs)) +
 	       (nettest.empty() && nettestBg.empty() ? std::string() : " nettest=" + nettest + " nettestbg=" + nettestBg + " nettestquit=" + (nettestQuit ? "1" : "0"));

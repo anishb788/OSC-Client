@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <new>
-#include <sys/stat.h>
 
 std::string describe(const HttpResult& r) {
 	switch (r.error) {
@@ -62,11 +61,6 @@ bool MemorySink::onData(const uint8_t* data, size_t len) {
 
 namespace {
 constexpr size_t kFileBuffer = 64 * 1024;
-
-bool statExists(const char* path) {
-	struct stat st;
-	return ::stat(path, &st) == 0;
-}
 }
 
 FileSink::~FileSink() {
@@ -112,26 +106,7 @@ void FileSink::closeFile() {
 
 bool FileSink::commit() {
 	if (committed_ || !finishedOk_) return false;
-	int (*rename)(const char*, const char*) = ops_.rename;
-	int (*remove)(const char*) = ops_.remove;
-	if (!rename) rename = &std::rename;
-	if (!remove) remove = &std::remove;
-	auto exists = ops_.exists ? ops_.exists : statExists;
-	const char* from = tmpPath_.c_str();
-	const char* to = path_.c_str();
-	if (rename(from, to) != 0) {
-		// libfat cannot rename over an existing file. Park the old target instead of deleting it, so a failure on the
-		// second rename still leaves the previous version in place.
-		if (!exists(to)) return false;
-		std::string bak = path_ + ".bak";
-		remove(bak.c_str());
-		if (rename(to, bak.c_str()) != 0) return false;
-		if (rename(from, to) != 0) {
-			rename(bak.c_str(), to);
-			return false;
-		}
-		remove(bak.c_str());
-	}
+	if (!commitFile(tmpPath_, path_, ops_)) return false;
 	committed_ = true;
 	return true;
 }

@@ -46,9 +46,12 @@ public:
 	std::vector<Category> categories;
 	std::vector<AppEntry> apps;
 	std::string featuredSlug;
-	// When this catalog was fetched (unix seconds, 0 = unknown). Mock: when the mock catalog was built; Increment 10
-	// fills it from the cache metadata. Shown by the "Couldn't refresh" message.
+	// When this catalog was fetched (unix seconds, 0 = unknown). Mock: when the mock catalog was built; a catalog read
+	// from the SD cache carries the cache's fetch time. Shown by the "Couldn't refresh" message and the offline chip.
 	int64_t fetchedAt = 0;
+	// True when the network was not used because it failed (stale cache fallback) or was switched off (`offline` dev
+	// option): Home then says "Offline: catalog from <date>". A fresh cache read at startup is not offline.
+	bool offline = false;
 
 	// Must be called once after `apps`, `categories` and `featuredSlug` are filled (loadMockCatalog and the API
 	// parser both do). It sanitizes every text field (see sanitizeText), computes the lowercase search fields, the

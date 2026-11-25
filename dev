@@ -18,6 +18,7 @@
 #                                                 fail=refresh skips the 60 s rate limit unless --ratelimit is given
 #     --mockdelay[=| ]<ms>                        how long the mock load takes (default 300), to test HOME / B during it
 #     --ratelimit[=| ]<seconds>                   Refresh rate limit (default 60; 0 = off, so every Refresh fetches)
+#     --cachettl[=| ]<seconds>                    catalog cache TTL instead of 1 h (0 = always stale, so startup always fetches)
 #     --api <base-url>                            catalog API base instead of http://hbb1.oscwii.org/api/v4 (a dead port
 #                                                 gives the error screen, tools/http_test_server.py gives "bad data")
 #     --autorefresh[=| ]<ms>                      press Refresh by itself after Home has been up that long (no clicking needed; 0 = every time Home appears)
@@ -28,7 +29,7 @@
 #     --nettestquit                               quit by itself when the script ends (a bg job still running tests stop())
 #                                                 Script syntax: src/net/NetSelfTest.h. The UI is untouched. Off by default.
 #   On Wii they are written to <app dir>/devstart as key=value lines (env vars don't reach
-#   Dolphin); on PC they are exported as OPENSHOP_START / _MOCK / _OFFLINE / _REFRESH / _FAIL / _TOPBAR / _MOCKDELAY / _RATELIMIT / _API / _AUTOREFRESH / _PERF / _NETTEST / _NETTESTBG / _NETTESTQUIT.
+#   Dolphin); on PC they are exported as OPENSHOP_START / _MOCK / _OFFLINE / _REFRESH / _FAIL / _TOPBAR / _MOCKDELAY / _RATELIMIT / _CACHETTL / _API / _AUTOREFRESH / _PERF / _NETTEST / _NETTESTBG / _NETTESTQUIT.
 #   Dolphin's virtual SD card is synced with ./sdcard (put bgm.mp3 in sdcard/apps/OpenShop/).
 #   ./sdcard is a symlink to .dolphin/sdcard; .dolphin/ is the only repo dir Dolphin may write to.
 #   ./dev package             build dist/OpenShop.zip for the Homebrew Channel (SD:/apps/OpenShop)
@@ -221,6 +222,7 @@ devstart_text() {
 	[[ -n "$OPT_FAIL" ]] && echo "fail=$OPT_FAIL"
 	[[ -n "$OPT_MOCKDELAY" ]] && echo "mockdelay=$OPT_MOCKDELAY"
 	[[ -n "$OPT_RATELIMIT" ]] && echo "ratelimit=$OPT_RATELIMIT"
+	[[ -n "$OPT_CACHETTL" ]] && echo "cachettl=$OPT_CACHETTL"
 	[[ -n "$OPT_API" ]] && echo "api=$OPT_API"
 	[[ -n "$OPT_AUTOREFRESH" ]] && echo "autorefresh=$OPT_AUTOREFRESH"
 	[[ -n "$OPT_TOPBAR" ]] && echo "topbar=$OPT_TOPBAR"
@@ -293,7 +295,7 @@ launch_pc() {
 	info "Launching Linux build (Ctrl+C or close window to stop)"
 	OPENSHOP_DATA="$APP_DIR" OPENSHOP_START="$START_SCREEN" OPENSHOP_MOCK="$OPT_MOCK" \
 		OPENSHOP_OFFLINE="$OPT_OFFLINE" OPENSHOP_REFRESH="$OPT_REFRESH" OPENSHOP_FAIL="$OPT_FAIL" OPENSHOP_TOPBAR="$OPT_TOPBAR" \
-		OPENSHOP_MOCKDELAY="$OPT_MOCKDELAY" OPENSHOP_RATELIMIT="$OPT_RATELIMIT" OPENSHOP_API="$OPT_API" OPENSHOP_AUTOREFRESH="$OPT_AUTOREFRESH" OPENSHOP_PERF="$OPT_PERF" \
+		OPENSHOP_MOCKDELAY="$OPT_MOCKDELAY" OPENSHOP_RATELIMIT="$OPT_RATELIMIT" OPENSHOP_CACHETTL="$OPT_CACHETTL" OPENSHOP_API="$OPT_API" OPENSHOP_AUTOREFRESH="$OPT_AUTOREFRESH" OPENSHOP_PERF="$OPT_PERF" \
 		OPENSHOP_NETTEST="$OPT_NETTEST" OPENSHOP_NETTESTBG="$OPT_NETTESTBG" OPENSHOP_NETTESTQUIT="$OPT_NETTESTQUIT" ./build-pc/openshop &
 	echo $! > build-pc/.pid
 }
@@ -352,7 +354,7 @@ headers() {
 usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; }
 
 cmd="${1:-}"; shift || true
-START_SCREEN=""; OPT_MOCK=0; OPT_OFFLINE=0; OPT_REFRESH=0; OPT_FAIL=""; OPT_TOPBAR=""; OPT_MOCKDELAY=""; OPT_RATELIMIT=""; OPT_API=""; OPT_AUTOREFRESH=""; OPT_PERF=0; OPT_NETTEST=""; OPT_NETTESTBG=""; OPT_NETTESTQUIT=0
+START_SCREEN=""; OPT_MOCK=0; OPT_OFFLINE=0; OPT_REFRESH=0; OPT_FAIL=""; OPT_TOPBAR=""; OPT_MOCKDELAY=""; OPT_RATELIMIT=""; OPT_CACHETTL=""; OPT_API=""; OPT_AUTOREFRESH=""; OPT_PERF=0; OPT_NETTEST=""; OPT_NETTESTBG=""; OPT_NETTESTQUIT=0
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 		--screen)
@@ -379,10 +381,10 @@ while [[ $# -gt 0 ]]; do
 			OPT_FAIL="${1#--fail=}"
 			case "$OPT_FAIL" in startup|refresh|both|none|0|1) ;; *) err "--fail: use startup, refresh, both or none"; exit 1 ;; esac
 			shift ;;
-		--mockdelay|--ratelimit|--autorefresh|--mockdelay=*|--ratelimit=*|--autorefresh=*)
+		--mockdelay|--ratelimit|--autorefresh|--cachettl|--mockdelay=*|--ratelimit=*|--autorefresh=*|--cachettl=*)
 			if [[ "$1" == *=* ]]; then name="${1%%=*}"; val="${1#*=}"; shift; else name="$1"; val="${2:-}"; shift $(( $# > 1 ? 2 : 1 )); fi
 			[[ "$val" =~ ^[0-9]{1,7}$ ]] || { err "$name: needs a number"; exit 1; }
-			case "$name" in --mockdelay) OPT_MOCKDELAY="$val" ;; --autorefresh) OPT_AUTOREFRESH="$val" ;; *) OPT_RATELIMIT="$val" ;; esac ;;
+			case "$name" in --mockdelay) OPT_MOCKDELAY="$val" ;; --autorefresh) OPT_AUTOREFRESH="$val" ;; --cachettl) OPT_CACHETTL="$val" ;; *) OPT_RATELIMIT="$val" ;; esac ;;
 		--api|--api=*)
 			if [[ "$1" == --api=* ]]; then OPT_API="${1#--api=}"; shift; else OPT_API="${2:-}"; shift $(( $# > 1 ? 2 : 1 )); fi
 			[[ "$OPT_API" == http://* || "$OPT_API" == https://* ]] || { err "--api: needs a URL like http://host:port/api/v4"; exit 1; } ;;

@@ -105,6 +105,13 @@ $(NETTESTTEST): tests/nettest_script_test.cpp src/net/NetSelfTest.cpp src/net/Ne
 	@mkdir -p $(dir $@)
 	$(CXX) $(TESTCXX) -pthread $(shell pkg-config --cflags sdl2) -o $@ tests/nettest_script_test.cpp src/net/NetSelfTest.cpp src/net/Worker.cpp $(NETSRCS) $(shell pkg-config --libs sdl2)
 
+# The OSC API parser. Reads tests/fixtures/ relative to the repo root (where make runs the tests).
+OSCAPITEST := $(BUILD)/tests/oscapi_test
+
+$(OSCAPITEST): tests/oscapi_test.cpp src/catalog/OscApi.cpp src/catalog/OscApi.h src/catalog/Catalog.cpp src/catalog/Catalog.h src/core/Log.h $(wildcard tests/fixtures/*)
+	@mkdir -p $(dir $@)
+	$(CXX) $(TESTCXX) $(shell pkg-config --cflags jansson) -o $@ tests/oscapi_test.cpp src/catalog/OscApi.cpp src/catalog/Catalog.cpp $(shell pkg-config --libs jansson)
+
 # Dev tool, built by `make test` but not run (it needs a URL). See the header comment in the file.
 HTTPGET := $(BUILD)/tests/httpget
 
@@ -119,7 +126,7 @@ $(GFXTEST): tests/gfx_test.cpp src/gfx/Gfx.cpp src/gfx/Gfx.h src/gfx/Theme.h src
 	@mkdir -p $(dir $@)
 	$(CXX) $(TESTCXX) $(shell pkg-config --cflags sdl2) -o $@ tests/gfx_test.cpp src/gfx/Gfx.cpp $(shell pkg-config --libs sdl2) -lm
 
-test: $(TESTBIN) $(CORETEST) $(TOPBARTEST) $(LAYOUTTEST) $(HTTPPARSETEST) $(HTTPTRANSFERTEST) $(HTTPPOSIXTEST) $(WORKERTEST) $(NETTESTTEST) $(HTTPGET) $(GFXTEST)
+test: $(TESTBIN) $(CORETEST) $(TOPBARTEST) $(LAYOUTTEST) $(HTTPPARSETEST) $(HTTPTRANSFERTEST) $(HTTPPOSIXTEST) $(WORKERTEST) $(NETTESTTEST) $(OSCAPITEST) $(HTTPGET) $(GFXTEST)
 	$(TESTBIN)
 	$(CORETEST)
 	$(TOPBARTEST)
@@ -129,6 +136,7 @@ test: $(TESTBIN) $(CORETEST) $(TOPBARTEST) $(LAYOUTTEST) $(HTTPPARSETEST) $(HTTP
 	$(HTTPPOSIXTEST)
 	$(WORKERTEST)
 	$(NETTESTTEST)
+	$(OSCAPITEST)
 	$(GFXTEST)
 
 clean:

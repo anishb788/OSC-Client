@@ -68,6 +68,40 @@ static void testSlug() {
 	CHECK(!isValidSlug("a b"));
 	CHECK(!isValidSlug("a\n"));
 	CHECK(!isValidSlug("caf\xc3\xa9"));
+	// Trailing dot (FAT and Windows drop it), device names, and the length limit.
+	CHECK(!isValidSlug("a.") && !isValidSlug("a..") && isValidSlug("a.b"));
+	for (const char* dev : {"con", "CON", "Prn", "aux", "NUL", "com1", "COM9", "lpt1", "LPT9", "con.txt", "Nul.tar.gz"})
+		CHECK(!isValidSlug(dev));
+	CHECK(isValidSlug("console") && isValidSlug("com0") && isValidSlug("com10") && isValidSlug("lpt") && isValidSlug("xcon"));
+	CHECK(isValidSlug(std::string(kMaxSlugLength, 'a')) && !isValidSlug(std::string(kMaxSlugLength + 1, 'a')));
+	CHECK(isReservedDeviceName("com1 .txt") && !isReservedDeviceName("com1x"));
+}
+
+static void testInstallable() {
+	AppEntry a;
+	CHECK(!a.installable());
+	a.archiveUrl = "http://example.org/a.zip";
+	CHECK(!a.installable()); // no MD5: refuse
+	a.archiveMd5 = "0123456789abcdef0123456789ABCDEF";
+	CHECK(a.installable());
+	a.archiveUrl = "https://example.org/a.zip";
+	CHECK(a.installable());
+	a.archiveUrl = "ftp://example.org/a.zip";
+	CHECK(!a.installable());
+	a.archiveUrl = "file:///etc/passwd";
+	CHECK(!a.installable());
+	a.archiveUrl = "example.org/a.zip";
+	CHECK(!a.installable());
+	a.archiveUrl = "http://";
+	CHECK(!a.installable());
+	a.archiveUrl = "http://example.org/a b.zip";
+	CHECK(!a.installable());
+	a.archiveUrl = "HTTP://example.org/a.zip";
+	CHECK(a.installable());
+	a.archiveMd5 = "0123456789abcdef0123456789abcde"; // 31 digits
+	CHECK(!a.installable());
+	a.archiveMd5 = "0123456789abcdef0123456789abcdeg";
+	CHECK(!a.installable());
 }
 
 static void testSearch() {
@@ -159,6 +193,7 @@ static void testFeaturedAndIndex() {
 int main() {
 	testSanitize();
 	testSlug();
+	testInstallable();
 	testSearch();
 	testSort();
 	testFeaturedAndIndex();

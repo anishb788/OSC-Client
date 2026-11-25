@@ -29,6 +29,9 @@ struct AppEntry {
 	std::string nameL{}, slugL{}, authorL{}, descL{}; // descL = shortDesc + " " + longDesc
 
 	bool hasFlag(std::string_view f) const;
+	// The only gate for installing (M3 must check it): an http(s) archive URL and a 32-hex archive MD5. An empty MD5
+	// means "refuse", never "skip the check". Over plain HTTP the MD5 protects against corruption, not a MITM.
+	bool installable() const;
 };
 
 struct Category {
@@ -83,9 +86,15 @@ void loadMockCatalog(Catalog& c);
 // version, URLs...), so those fields never contain a line break.
 std::string sanitizeText(std::string_view s, bool singleLine);
 
-// Slugs become cache and install paths: only [A-Za-z0-9._-]+, no leading dot (so never "." or ".."). Parsers must
-// skip apps whose slug fails this.
+// Slugs become cache and install paths: [A-Za-z0-9._-]{1,kMaxSlugLength}, no leading dot (so never "." or ".."), no
+// trailing dot (Windows/FAT drop it), and not a reserved device name. Parsers must skip apps whose slug fails this.
+inline constexpr size_t kMaxSlugLength = 128;
 bool isValidSlug(std::string_view slug);
+// FAT/Windows device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9), case-insensitive, with or without an extension:
+// "con" and "Con.txt" are reserved, "console" and "com0" are not.
+bool isReservedDeviceName(std::string_view name);
+// True for "http://" or "https://" (any case) followed by at least one character, with no space or control character.
+bool isHttpUrl(std::string_view url);
 
 // Display helpers
 std::string formatSize(uint64_t bytes);

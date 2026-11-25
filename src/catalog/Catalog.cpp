@@ -75,8 +75,41 @@ std::string sanitizeText(std::string_view s, bool singleLine) {
 	return out;
 }
 
+bool AppEntry::installable() const {
+	if (!isHttpUrl(archiveUrl) || archiveMd5.size() != 32) return false;
+	return std::all_of(archiveMd5.begin(), archiveMd5.end(), [](char c) { return std::isxdigit((unsigned char)c) != 0; });
+}
+
+bool isReservedDeviceName(std::string_view name) {
+	// Windows treats everything from the first dot as an extension; trailing spaces before it are dropped too.
+	size_t dot = name.find('.');
+	if (dot != std::string_view::npos) name = name.substr(0, dot);
+	while (!name.empty() && name.back() == ' ') name.remove_suffix(1);
+	std::string l = lower(std::string(name));
+	if (l == "con" || l == "prn" || l == "aux" || l == "nul") return true;
+	return l.size() == 4 && (l.compare(0, 3, "com") == 0 || l.compare(0, 3, "lpt") == 0) && l[3] >= '1' && l[3] <= '9';
+}
+
+bool isHttpUrl(std::string_view url) {
+	size_t pre = 0;
+	auto starts = [&](std::string_view p) {
+		if (url.size() <= p.size()) return false;
+		for (size_t i = 0; i < p.size(); i++) {
+			if (std::tolower((unsigned char)url[i]) != p[i]) return false;
+		}
+		pre = p.size();
+		return true;
+	};
+	if (!starts("http://") && !starts("https://")) return false;
+	for (char ch : url.substr(pre)) {
+		if ((unsigned char)ch <= 0x20 || ch == 0x7F) return false;
+	}
+	return true;
+}
+
 bool isValidSlug(std::string_view slug) {
-	if (slug.empty() || slug[0] == '.') return false;
+	if (slug.empty() || slug.size() > kMaxSlugLength || slug[0] == '.' || slug.back() == '.') return false;
+	if (isReservedDeviceName(slug)) return false;
 	for (char c : slug) {
 		if (!(std::isalnum((unsigned char)c) && (unsigned char)c < 0x80) && c != '.' && c != '_' && c != '-') return false;
 	}

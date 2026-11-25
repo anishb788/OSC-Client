@@ -28,7 +28,7 @@ endif
 
 CXXFLAGS := -std=gnu++20 -g -O1 $(WARN) $(SANFLAGS) $(DEFS) -Isrc -MMD -MP $(shell pkg-config --cflags $(PKGS))
 ASFLAGS  := -Wa,-I.
-LDLIBS   := $(shell pkg-config --libs $(PKGS)) -lm
+LDLIBS   := $(shell pkg-config --libs $(PKGS)) -lz -lm
 
 SRCS := $(shell find src -name '*.cpp')
 OBJS := $(SRCS:%.cpp=$(BUILD)/%.o) $(BUILD)/src/assets.o
@@ -147,7 +147,16 @@ $(GFXTEST): tests/gfx_test.cpp src/gfx/Gfx.cpp src/gfx/Gfx.h src/gfx/Theme.h src
 	@mkdir -p $(dir $@)
 	$(CXX) $(TESTCXX) $(shell pkg-config --cflags sdl2) -o $@ tests/gfx_test.cpp src/gfx/Gfx.cpp $(shell pkg-config --libs sdl2) -lm
 
-test: $(TESTBIN) $(CORETEST) $(TOPBARTEST) $(LAYOUTTEST) $(HTTPPARSETEST) $(HTTPTRANSFERTEST) $(HTTPPOSIXTEST) $(WORKERTEST) $(NETTESTTEST) $(OSCAPITEST) $(NETLOADERTEST) $(CACHETEST) $(WRAPTEST) $(HTTPGET) $(GFXTEST)
+# Real icons: PNG validation, the SD icon store, the IconCache state machine and LRU against a real worker and a loopback
+# server serving tests/fixtures/icons/*.png. Textures go to an SDL software renderer. Needs SDL_image.
+ICONTEST := $(BUILD)/tests/icon_test
+ICONSRCS := src/gfx/IconCache.cpp src/gfx/IconPng.cpp src/gfx/IconStore.cpp src/catalog/Catalog.cpp src/net/Worker.cpp $(NETSRCS)
+
+$(ICONTEST): tests/icon_test.cpp src/gfx/IconCache.h src/gfx/IconPng.h src/gfx/IconStore.h src/gfx/TextEvict.h $(ICONSRCS) $(NETDEPS) $(wildcard tests/fixtures/icons/*)
+	@mkdir -p $(dir $@)
+	$(CXX) $(TESTCXX) -Itests -pthread $(shell pkg-config --cflags sdl2 SDL2_image) -o $@ tests/icon_test.cpp $(ICONSRCS) $(shell pkg-config --libs sdl2 SDL2_image) -lz
+
+test: $(TESTBIN) $(CORETEST) $(TOPBARTEST) $(LAYOUTTEST) $(HTTPPARSETEST) $(HTTPTRANSFERTEST) $(HTTPPOSIXTEST) $(WORKERTEST) $(NETTESTTEST) $(OSCAPITEST) $(NETLOADERTEST) $(CACHETEST) $(WRAPTEST) $(HTTPGET) $(GFXTEST) $(ICONTEST)
 	$(TESTBIN)
 	$(CORETEST)
 	$(TOPBARTEST)
@@ -162,6 +171,7 @@ test: $(TESTBIN) $(CORETEST) $(TOPBARTEST) $(LAYOUTTEST) $(HTTPPARSETEST) $(HTTP
 	$(CACHETEST)
 	$(WRAPTEST)
 	$(GFXTEST)
+	$(ICONTEST)
 
 clean:
 	rm -rf $(BUILD)

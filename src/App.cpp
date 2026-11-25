@@ -3,6 +3,7 @@
 
 #include <cstdio>
 #include <ctime>
+#include <set>
 
 #include <SDL_image.h>
 #include <jansson.h>
@@ -57,6 +58,15 @@ bool App::init(int argc, char** argv) {
 		net::nettestLogTo(platform::dataDir() + "/nettest.txt");
 		netTest_ = std::make_unique<net::NetSelfTest>(worker_, script, opts.nettestQuit);
 	}
+	{
+		IconCacheConfig ic;
+		ic.enabled = !opts.mock; // the mock catalog has no real icons: placeholders, and no network or SD use
+		ic.network = !opts.offline;
+		ic.cacheDir = platform::dataDir() + "/cache";
+		ic.urlBase = opts.iconBase;
+		icons_ = std::make_unique<IconCache>(&worker_, gfx.renderer(), std::move(ic));
+		ui.icons = icons_.get();
+	}
 	LOG("OpenShop %s, User-Agent: %s", OPENSHOP_VERSION, userAgent());
 	LOG("Dev options: %s", opts.describe().c_str());
 	LOG("jansson %s", JANSSON_VERSION);
@@ -106,6 +116,9 @@ void App::shutdown() {
 	debuglog::closeFile();
 #endif
 	stack.clear();
+	// Textures must go before the renderer does (Gfx::shutdown below).
+	ui.icons = nullptr;
+	icons_.reset();
 	IMG_Quit();
 	audio::shutdown();
 	text.shutdown();
@@ -172,6 +185,15 @@ bool App::refreshCatalog() {
 	if (!resetTo(std::move(screen), false)) return false;
 	loads.setPendingScreen(raw);
 	return true;
+}
+
+// Once, after the first catalog is installed: icons of apps that are no longer in it are deleted in the background
+// (never after a Refresh, and never with the mock catalog, whose slugs would wipe the real cache).
+void App::startIconPrune() {
+	iconsPruned_ = true;
+	std::set<std::string> keep;
+	for (const AppEntry& a : catalog_.apps) keep.insert(a.slug);
+	icons_->startPrune(keep);
 }
 
 // Dev hook (autorefresh=): once Home alone has been up for autoRefreshMs, press Refresh for the user.
@@ -272,7 +294,7 @@ void App::run() {
 	const double freq = (double)SDL_GetPerformanceFrequency();
 	Input in;
 	// perf=1 bookkeeping: sums over the last 120 frames, in ms (draw = beginFrame to just before present).
-	double perfCpu = 0, perfPresent = 0, perfFrame = 0;
+	double perfCpu = 0, perfPresent = 0, perfFrame = 0, perfMax = 0;
 	int perfFrames = 0;
 
 	while (!quitRequested) {
@@ -280,6 +302,7 @@ void App::run() {
 		float dt = std::min(0.1f, (float)((now - last) / freq));
 		last = now;
 		perfFrame += dt * 1000.0;
+		perfMax = std::max(perfMax, (double)dt * 1000.0);
 
 		platform::poll(in, dt, gfx.width());
 		if (in.quit) break;
@@ -320,6 +343,8 @@ void App::run() {
 		ui.inputEnabled = fadeDir == 0;
 		ui.setModalDepth(dialog ? 1 : 0);
 		ui.beginFrame(in, dt);
+		icons_->beginFrame(ui.time, loads.generation());
+		if (!iconsPruned_ && loads.generation() > 0 && !opts.mock) startIconPrune();
 
 		if (ui.inputEnabled && (in.pressed & BTN_ONE) && audio::hasMusic()) audio::toggleMusic();
 		if (ui.inputEnabled && !dialog && (in.pressed & BTN_HOME) && !stack.back()->handleHome(*this)) quitPrompt();
@@ -336,14 +361,17 @@ void App::run() {
 		gfx.endFrame();
 
 		text.endFrame();
+		icons_->endFrame();
 		if (opts.perf) {
 			Uint64 end = SDL_GetPerformanceCounter();
 			perfCpu += (double)(beforePresent - drawStart) * 1000.0 / freq;
 			perfPresent += (double)(end - beforePresent) * 1000.0 / freq;
 			if (++perfFrames == 120) {
-				LOG("perf: frame %.2f ms, draw %.2f ms, present %.2f ms, masks created %d (%d frames)", perfFrame / 120,
-				    perfCpu / 120, perfPresent / 120, gfx.masksCreated(), perfFrames);
-				perfCpu = perfPresent = perfFrame = 0;
+				const IconCache::Stats is = icons_->stats();
+				LOG("perf: frame %.2f ms (worst %.1f), draw %.2f ms, present %.2f ms, masks created %d (%d frames); icons %zu textures %zu KB, text %zu textures %zu KB",
+				    perfFrame / 120, perfMax, perfCpu / 120, perfPresent / 120, gfx.masksCreated(), perfFrames, is.textures,
+				    is.textureBytes / 1024, text.cacheCount(), text.cacheBytes() / 1024);
+				perfCpu = perfPresent = perfFrame = perfMax = 0;
 				perfFrames = 0;
 			}
 		}

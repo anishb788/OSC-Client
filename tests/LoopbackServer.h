@@ -103,10 +103,11 @@ public:
 		std::lock_guard<std::mutex> l(mu_);
 		routes_[path] = {bytes, false};
 	}
-	// A header promising 100000 bytes, three bytes, then silence until the client leaves.
-	void addStallRoute(const std::string& path) {
+	// A header promising `promised` bytes (100000 unless a test needs it under a size cap), three bytes, then silence until
+	// the client leaves.
+	void addStallRoute(const std::string& path, size_t promised = 100000) {
 		std::lock_guard<std::mutex> l(mu_);
-		routes_[path] = {"HTTP/1.1 200 OK\r\nContent-Length: 100000\r\n\r\nabc", true};
+		routes_[path] = {"HTTP/1.1 200 OK\r\nContent-Length: " + std::to_string(promised) + "\r\n\r\nabc", true};
 	}
 	std::vector<std::string> requests() {
 		std::lock_guard<std::mutex> l(mu_);

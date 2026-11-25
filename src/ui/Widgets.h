@@ -36,7 +36,9 @@ bool pillButton(Ui& ui, Id id, Rect r, std::string_view label, const PillSpec& s
 // iconFontSize sizes the chevron (about 1.15x). Use rects of at least 36 px on the short side for a pointer target.
 bool arrowButton(Ui& ui, Id id, Rect r, Icon dir, int iconFontSize = 18);
 
-// Placeholder app icon (real 128x48 PNG icons arrive with the live catalog).
+// An app's icon: the real PNG (aspect-fit inside `r`, fading in over the placeholder) once the IconCache has it, the
+// procedural placeholder (category gradient and name) until then and when the icon is missing or failed. Asking is what
+// requests the icon, so call it only for icons that are actually drawn this frame.
 void drawAppIcon(Ui& ui, const AppEntry& app, Rect r);
 
 // The width drawChip will draw `label` at (with or without an icon), so a caller can fit it before drawing.

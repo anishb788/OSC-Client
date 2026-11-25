@@ -11,6 +11,7 @@
 #include "catalog/LoadTracker.h"
 #include "core/DevOptions.h"
 #include "gfx/Gfx.h"
+#include "gfx/IconCache.h"
 #include "gfx/Text.h"
 #include "net/NetSelfTest.h"
 #include "net/Worker.h"
@@ -82,6 +83,9 @@ public:
 	// rules, including "jobs never hold catalog pointers", are in net/Worker.h. If start() failed, running() is false
 	// and submit() returns 0: callers must show an error instead of waiting on a job that will never run.
 	net::Worker& worker() { return worker_; }
+	// App icons (Increment 11): textures keyed by slug, fed by Icon jobs on the worker. Null before init() and after
+	// shutdown(); Ui::icons points at it for the widgets.
+	IconCache* icons() { return icons_.get(); }
 
 	bool init(int argc, char** argv);
 	void run();
@@ -137,10 +141,14 @@ private:
 	void dropDialog();
 	void openDevStartScreen();
 	void autoRefreshTick();
+	void startIconPrune();
 	void comingSoon(const char* what);
 
 	Catalog catalog_;
 	net::Worker worker_{net::defaultTransportFactory()};
+	// Declared after the worker: its jobs only hold shared state, but it is destroyed (textures freed) first anyway.
+	std::unique_ptr<IconCache> icons_;
+	bool iconsPruned_ = false; // the startup prune of icons of apps that left the catalog was started
 	// Dev-only (nettest= in devstart); null normally. Declared after the worker so it is destroyed first.
 	std::unique_ptr<net::NetSelfTest> netTest_;
 	// Which LoadingScreen may install, the load token, the generation and the last network fetch (host-tested).

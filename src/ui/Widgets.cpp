@@ -1,6 +1,7 @@
 #include "ui/Widgets.h"
 
 #include "catalog/Catalog.h"
+#include "gfx/IconCache.h"
 #include "gfx/Text.h"
 #include "gfx/Theme.h"
 #include "ui/TopBarLayout.h"
@@ -93,7 +94,7 @@ Icon categoryIcon(std::string_view c) {
 	return Icon::Grid;
 }
 
-void drawAppIcon(Ui& ui, const AppEntry& app, Rect r) {
+static void drawIconPlaceholder(Ui& ui, const AppEntry& app, Rect r) {
 	Color base = categoryColor(app.category);
 	// Vary the hue a little per app so neighbouring placeholders differ.
 	uint32_t h = makeId(app.slug);
@@ -107,6 +108,18 @@ void drawAppIcon(Ui& ui, const AppEntry& app, Rect r) {
 	ui.g.fillRoundRect({r.x + 3, r.y + 2, r.w - 6, r.h * 0.4f}, rad * 0.8f, Color{255, 255, 255, 40});
 	int size = std::max(10, (int)(r.h * 0.36f));
 	ui.t.drawIn(Font::Bold, size, app.name, r.inset(r.h * 0.18f, 0), theme::white, Align::Center);
+}
+
+void drawAppIcon(Ui& ui, const AppEntry& app, Rect r) {
+	std::optional<IconCache::View> v;
+	if (ui.icons) v = ui.icons->get(app.slug, app.iconUrl, app.iconSize, ui.time);
+	// The placeholder stays underneath until the fade-in is complete (and for good when there is no icon).
+	if (!v || v->alpha < 1.0f) drawIconPlaceholder(ui, app, r);
+	if (!v) return;
+	// Aspect-fit: the API's icons are 128x48, but nothing here relies on it.
+	const float k = std::min(r.w / (float)v->w, r.h / (float)v->h);
+	const float dw = v->w * k, dh = v->h * k;
+	ui.g.drawTexture(v->tex, {r.cx() - dw / 2, r.cy() - dh / 2, dw, dh}, theme::white.withAlpha(v->alpha));
 }
 
 namespace {

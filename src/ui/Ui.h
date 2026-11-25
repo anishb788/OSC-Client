@@ -8,6 +8,7 @@
 
 class Gfx;
 class Text;
+class IconCache;
 
 using Id = uint32_t;
 Id makeId(std::string_view s, uint32_t salt = 0);
@@ -23,6 +24,8 @@ public:
 	float dt = 0;
 	double time = 0;
 	bool inputEnabled = true;
+	// Set by App once the renderer exists; widgets that draw app icons ask it for textures. Null = placeholders only.
+	IconCache* icons = nullptr;
 
 	Ui(Gfx& gfx, Text& text) : g(gfx), t(text) {}
 

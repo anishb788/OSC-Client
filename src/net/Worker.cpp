@@ -20,7 +20,8 @@ namespace {
 // whatever the platform picks (a small LWP stack on the Wii is the worry), so ask for a known size.
 constexpr size_t kStackBytes = 256 * 1024;
 
-constexpr int kActiveLimit[3] = {1, 1, 2};   // indexed by JobClass
+constexpr int kClasses = 4;
+constexpr int kActiveLimit[kClasses] = {1, 1, 1, 2};   // indexed by JobClass
 
 struct Lock {
 	explicit Lock(SDL_mutex* m) : m_(m) { SDL_LockMutex(m_); }
@@ -259,11 +260,11 @@ std::shared_ptr<Worker::Entry> Worker::pickLocked() {
 			e->lastRun = now;
 		}
 	}
-	int active[3] = {0, 0, 0};
+	int active[kClasses] = {};
 	for (auto& e : entries_) {
 		if (e->active) active[static_cast<int>(e->cls)]++;
 	}
-	for (int c = 0; c < 3; c++) {
+	for (int c = 0; c < kClasses; c++) {
 		while (active[c] < kActiveLimit[c]) {
 			Entry* best = nullptr;
 			for (auto& e : entries_) {
@@ -290,7 +291,7 @@ std::shared_ptr<Worker::Entry> Worker::pickLocked() {
 	};
 
 	if (auto c = oldest([](const Entry& e) { return e.cancel.load(std::memory_order_relaxed); })) return c;
-	int top = 3;
+	int top = kClasses;
 	for (auto& e : entries_) {
 		if (e->active) top = std::min(top, static_cast<int>(e->cls));
 	}

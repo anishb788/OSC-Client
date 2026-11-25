@@ -38,6 +38,10 @@ static void testDevOptions() {
 	CHECK(parse("api=http://127.0.0.1:9/api/v4/\n").apiBase == "http://127.0.0.1:9/api/v4");
 	CHECK(parse("api=http://h/x?a=b\n").apiBase == "http://h/x?a=b");
 	CHECK(parse("api=http://h/v4\n").describe().find(" api=http://h/v4") != std::string::npos);
+	// icons=: where icons are fetched from, "<base>/<slug>/icon.png"; empty = the catalog's URLs.
+	CHECK(parse("").iconBase.empty());
+	CHECK(parse("icons=http://127.0.0.1:9/icons/\n").iconBase == "http://127.0.0.1:9/icons");
+	CHECK(parse("icons=http://h/i\n").describe().find(" icons=http://h/i") != std::string::npos);
 	CHECK(parse("").autoRefreshMs == -1 && parse("autorefresh=4000\n").autoRefreshMs == 4000 && parse("autorefresh=x\n").autoRefreshMs == -1);
 	// mockdelay= / ratelimit=: non-negative integers; anything else keeps the built-in default (-1).
 	CHECK(parse("").mockDelayMs == -1 && parse("").rateLimitSec == -1);

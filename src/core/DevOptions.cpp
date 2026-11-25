@@ -71,6 +71,7 @@ void DevOptions::parseFile(const std::string& text, DevOptions& o) {
 		else if (key == "cachettl") o.cacheTtlSec = parseNonNegative(val);
 		else if (key == "autorefresh") o.autoRefreshMs = parseNonNegative(val);
 		else if (key == "api") o.apiBase = cleanApiBase(val);
+		else if (key == "icons") o.iconBase = cleanApiBase(val);
 		else if (key == "topbar") o.topbarAll = val == "all";
 		else if (key == "perf") o.perf = truthy(val);
 		else if (key == "nettest") o.nettest = val;
@@ -93,6 +94,7 @@ DevOptions DevOptions::load(const std::string& dataDir) {
 	if (const char* v = std::getenv("OPENSHOP_CACHETTL"); v && *v) o.cacheTtlSec = parseNonNegative(v);
 	if (const char* v = std::getenv("OPENSHOP_AUTOREFRESH"); v && *v) o.autoRefreshMs = parseNonNegative(v);
 	if (const char* v = std::getenv("OPENSHOP_API"); v && *v) o.apiBase = cleanApiBase(v);
+	if (const char* v = std::getenv("OPENSHOP_ICONS"); v && *v) o.iconBase = cleanApiBase(v);
 	if (const char* v = std::getenv("OPENSHOP_TOPBAR"); v && *v) o.topbarAll = std::string(v) == "all";
 	if (const char* v = std::getenv("OPENSHOP_PERF"); v && *v) o.perf = truthy(v);
 	if (const char* v = std::getenv("OPENSHOP_NETTEST"); v && *v) o.nettest = v;
@@ -109,6 +111,7 @@ std::string DevOptions::describe() const {
 	       " ratelimit=" + std::to_string(rateLimitSec) + " perf=" + (perf ? "1" : "0") +
 	       (cacheTtlSec < 0 ? std::string() : " cachettl=" + std::to_string(cacheTtlSec)) +
 	       (apiBase.empty() ? std::string() : " api=" + apiBase) +
+	       (iconBase.empty() ? std::string() : " icons=" + iconBase) +
 	       (autoRefreshMs < 0 ? std::string() : " autorefresh=" + std::to_string(autoRefreshMs)) +
 	       (nettest.empty() && nettestBg.empty() ? std::string() : " nettest=" + nettest + " nettestbg=" + nettestBg + " nettestquit=" + (nettestQuit ? "1" : "0"));
 }

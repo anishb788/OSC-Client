@@ -1,6 +1,8 @@
 #include "gfx/Text.h"
+#include "gfx/TextEvict.h"
 #include "gfx/Wrap.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include "core/Log.h"
@@ -36,6 +38,7 @@ bool Text::init(SDL_Renderer* renderer, float scaleX) {
 void Text::shutdown() {
 	for (auto& [k, e] : cache) SDL_DestroyTexture(e.tex);
 	cache.clear();
+	cacheBytes_ = 0;
 	for (auto& [k, f] : fonts) TTF_CloseFont(f);
 	fonts.clear();
 	TTF_Quit();
@@ -56,20 +59,10 @@ TTF_Font* Text::font(Font f, int size) {
 	return font;
 }
 
-std::string Text::key(Font f, int size, std::string_view s) {
-	std::string k;
-	k.reserve(s.size() + 8);
-	k += (char)('0' + (int)f);
-	k += std::to_string(size);
-	k += '|';
-	k += s;
-	return k;
-}
-
 const Text::Entry* Text::get(Font f, int size, std::string_view s) {
 	if (s.empty()) return nullptr;
-	std::string k = key(f, size, s);
-	auto it = cache.find(k);
+	const int fs = fontKey(f, size);
+	auto it = cache.find(KeyView{fs, s});
 	if (it != cache.end()) {
 		it->second.lastUsed = frame;
 		return &it->second;
@@ -93,32 +86,61 @@ const Text::Entry* Text::get(Font f, int size, std::string_view s) {
 	if (!tex) return nullptr;
 	SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
 
-	auto [ins, ok] = cache.emplace(std::move(k), Entry{tex, src.w, src.h, frame});
+	cacheBytes_ += size_t(src.w) * size_t(src.h) * 4;
+	auto [ins, ok] = cache.emplace(Key{fs, std::string(s)}, Entry{tex, src.w, src.h, frame});
 	return &ins->second;
 }
 
 void Text::endFrame() {
 	frame++;
-	if (cache.size() < kCacheSoftLimit) return;
-	for (auto it = cache.begin(); it != cache.end();) {
-		if (frame - it->second.lastUsed > kEvictAfterFrames) {
-			SDL_DestroyTexture(it->second.tex);
-			it = cache.erase(it);
-		} else {
-			++it;
+	// Strings drawn this frame have lastUsed == frame - 1 now; they are never evicted here.
+	auto drop = [&](auto it) {
+		cacheBytes_ -= size_t(it->second.w) * size_t(it->second.h) * 4;
+		SDL_DestroyTexture(it->second.tex);
+		return cache.erase(it);
+	};
+	if (cache.size() >= kCacheSoftLimit) {
+		for (auto it = cache.begin(); it != cache.end();) {
+			if (frame - it->second.lastUsed > kEvictAfterFrames) it = drop(it);
+			else ++it;
 		}
 	}
+	if (cacheBytes_ <= kByteBudget) return;
+	// Over the byte budget. When every entry was drawn last frame (a screen that really needs this much text) there is
+	// nothing to free: look for that with one allocation-free pass and say nothing, instead of sorting and logging at 60 Hz.
+	bool anyOld = false;
+	for (const auto& [k, e] : cache) {
+		if (textevict::evictable(e.lastUsed, frame)) { anyOld = true; break; }
+	}
+	if (!anyOld) return;
+	// Least recently used first, down to 3/4 of the budget so this does not run every frame.
+	const size_t before = cacheBytes_, count = cache.size();
+	std::vector<textevict::Candidate> cand;
+	std::vector<const Key*> keys;
+	cand.reserve(cache.size());
+	keys.reserve(cache.size());
+	for (auto& [k, e] : cache) {
+		cand.push_back({e.lastUsed, size_t(e.w) * size_t(e.h) * 4});
+		keys.push_back(&k);
+	}
+	const std::vector<size_t> victims = textevict::choose(cand, cacheBytes_, kByteBudget, kByteBudget / 4 * 3, frame);
+	for (size_t i : victims) drop(cache.find(KeyView{keys[i]->fs, keys[i]->s}));
+	if (!victims.empty())
+		LOG("Text cache over budget: %zu KB in %zu textures -> %zu KB in %zu", before / 1024, count, cacheBytes_ / 1024, cache.size());
 }
 
 int Text::width(Font f, int size, std::string_view s) {
 	if (s.empty()) return 0;
-	std::string k = key(f, size, s);
-	auto it = widths.find(k);
+	const int fs = fontKey(f, size);
+	auto it = widths.find(KeyView{fs, s});
 	if (it != widths.end()) return it->second;
 	int w = 0, h = 0;
-	if (TTF_Font* fnt = font(f, size)) TTF_SizeUTF8(fnt, k.c_str() + (k.find('|') + 1), &w, &h);
+	if (TTF_Font* fnt = font(f, size)) {
+		std::string str(s); // TTF_SizeUTF8 wants a terminated string; only a miss pays for the copy
+		TTF_SizeUTF8(fnt, str.c_str(), &w, &h);
+	}
 	if (widths.size() > 4000) widths.clear();
-	widths.emplace(std::move(k), w);
+	widths.emplace(Key{fs, std::string(s)}, w);
 	return w;
 }
 

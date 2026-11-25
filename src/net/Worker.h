@@ -78,7 +78,9 @@ namespace net {
 
 using JobId = uint64_t;   // 0 = none / rejected
 
-enum class JobClass { Catalog = 0, Icon = 1, Background = 2 };
+// IconLocal is for an icon's SD card read, which finishes in one short step: its own lane, so a cached icon never waits
+// behind a network download that is stalled in the single Icon slot.
+enum class JobClass { Catalog = 0, IconLocal = 1, Icon = 2, Background = 3 };
 enum class JobStep { Pending, Done };
 
 // Progress a job publishes for the main thread to read (Worker::progress). 32-bit atomics because the Wii's PPC has

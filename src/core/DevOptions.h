@@ -5,11 +5,11 @@
 //
 // Sources, highest priority first:
 //   1. Environment (PC build, set by `./dev`): OPENSHOP_START, OPENSHOP_MOCK, OPENSHOP_OFFLINE,
-//      OPENSHOP_REFRESH, OPENSHOP_FAIL, OPENSHOP_TOPBAR, OPENSHOP_MOCKDELAY, OPENSHOP_RATELIMIT, OPENSHOP_CACHETTL, OPENSHOP_API, OPENSHOP_AUTOREFRESH, OPENSHOP_PERF, OPENSHOP_NETTEST, OPENSHOP_NETTESTBG, OPENSHOP_NETTESTQUIT. An empty variable is ignored. On/off flags
+//      OPENSHOP_REFRESH, OPENSHOP_FAIL, OPENSHOP_TOPBAR, OPENSHOP_MOCKDELAY, OPENSHOP_RATELIMIT, OPENSHOP_CACHETTL, OPENSHOP_API, OPENSHOP_ICONS, OPENSHOP_AUTOREFRESH, OPENSHOP_PERF, OPENSHOP_NETTEST, OPENSHOP_NETTESTBG, OPENSHOP_NETTESTQUIT. An empty variable is ignored. On/off flags
 //      (mock, offline, refresh) are on unless the value is "0", "false", "no" or "off"; fail, topbar, mockdelay
 //      and ratelimit take the values described next to their fields.
 //   2. <dataDir>/devstart (Wii, written by `./dev`; env vars don't reach Dolphin): one key=value
-//      per line with keys screen, mock, offline, refresh, fail, topbar, mockdelay, ratelimit, cachettl, api, autorefresh, perf, nettest, nettestbg, nettestquit. A line without '=' is a bare screen name
+//      per line with keys screen, mock, offline, refresh, fail, topbar, mockdelay, ratelimit, cachettl, api, icons, autorefresh, perf, nettest, nettestbg, nettestquit. A line without '=' is a bare screen name
 //      (the old one-line format).
 struct DevOptions {
 	std::string screen; // "" = normal start
@@ -33,6 +33,10 @@ struct DevOptions {
 	// api=<base url>: replaces the OSC API base (http://hbb1.oscwii.org/api/v4) for the catalog fetch, e.g. a dead port
 	// to see the error screen or tools/http_test_server.py to see "bad data". Empty = the real server.
 	std::string apiBase;
+
+	// icons=<base url>: icons are fetched from "<base>/<slug>/icon.png" instead of the catalog's URLs (a local test server,
+	// or a dead port to see the placeholders). Empty = the catalog's URLs. Ignored by mock mode, which has no real icons.
+	std::string iconBase;
 
 	// autorefresh=<ms>: whenever Home has been the only screen for this long, trigger a Refresh by itself (like the
 	// top-bar button). Lets the Refresh path be checked where nothing can click (Dolphin, CI). -1 = off.

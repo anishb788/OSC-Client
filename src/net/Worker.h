@@ -6,6 +6,10 @@
 //  - ALL HTTP in the app goes through this worker, M3's archive downloads included, as Background jobs. libogc's
 //    net_* is not known to be thread-safe, so M3 must not create its own network thread or a netMutex. (M3's install
 //    worker, which extracts, hashes and writes the SD card, may exist but never touches a socket.)
+//    The one deliberate exception is the Wii's net_gethostbyname, which runs on a detached DNS thread (HttpWii.cpp) so
+//    the worker can abandon a lookup it cannot interrupt. That is safe enough because each net_* call is a separate IOS
+//    ioctl with its own buffers, and HttpWii allows only one live lookup at a time, which protects the static buffer
+//    net_gethostbyname returns. Everything else stays on the worker thread.
 //  - The worker thread never calls audio, Text, Ui or Gfx and never creates SDL textures. A job hands results to the
 //    main thread with JobContext::post(); App::run() calls drainResults() once per frame.
 //  - Jobs and their results never capture `const AppEntry*`, `const AppEntry&` or the Catalog. They copy slug, URLs,
@@ -43,13 +47,15 @@
 //  - Each job has a cancel flag (JobContext::cancel). cancel(id), dropWhere() and cancelAll() raise it. A cancelled job
 //    is still stepped (even if still queued and over its class limit) so it can finish through its normal path
 //    (HttpTransfer reports Cancelled, sinks run onFinish(false), FileSink removes its .tmp); it should return Done
-//    promptly. A cancelled job is stepped before any other.
+//    promptly. A cancelled job is stepped before any other. The job's transport also gets the flag
+//    (Transport::setCancel), so a backend's long init or DNS wait ends at once instead of stalling the worker.
 //  - stop() raises every flag, wakes the thread, steps each remaining job to completion (at most kStopSteps steps
 //    each, then the job is destroyed as it stands; destroying an HttpTransfer finishes it as Cancelled) and joins. A
 //    job that ignores a plain cancel() gets the same kStopSteps steps after the flag is raised, then is destroyed too
 //    (its onDone does not run then), so it cannot starve the others.
 //    Poll waits are at most ~50 ms and step budgets ~30 ms, so a stop takes well under a second, except while a job is
-//    inside blocking DNS (getaddrinfo / net_gethostbyname), which cannot be interrupted.
+//    inside blocking DNS (getaddrinfo on the PC, where stop() waits it out). On the Wii the lookup runs on a throwaway
+//    thread and Transport::abort(), which stop() calls before joining, makes the worker walk away from it.
 //  - Undelivered results stay queued; drainResults() still works after stop(), and the destructor discards them.
 //  - Once stopped a Worker cannot be restarted and submit() returns 0. Neither does it accept jobs before a successful
 //    start(): callers must treat a 0 from submit() as "this job will never run" and show an error, not wait.
@@ -145,8 +151,7 @@ public:
 	static constexpr int kBackgroundSliceMs = 250;
 	static constexpr int kStopSteps = 8;
 
-	// An empty factory (or one returning null) gives jobs a transport that reports NoNetwork, which is what the Wii
-	// build does until Increment 7 supplies a libogc one.
+	// An empty factory (or one returning null) gives jobs a transport that reports NoNetwork.
 	// `lowPriority` runs the thread at SDL_THREAD_PRIORITY_LOW, below the render thread; tests turn it off because a
 	// nice-19 thread starves under CPU load and makes timing checks flaky.
 	explicit Worker(TransportFactory factory, bool lowPriority = true);
@@ -196,8 +201,7 @@ private:
 	std::atomic<bool> running_{false};
 };
 
-// The platform's real transport: POSIX sockets on the PC. Empty on the Wii until Increment 7 adds libogc, so every
-// job there fails with NoNetwork instead of crashing.
+// The platform's real transport: POSIX sockets on the PC, libogc net_* on the Wii.
 Worker::TransportFactory defaultTransportFactory();
 
 }  // namespace net

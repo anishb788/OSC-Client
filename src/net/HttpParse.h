@@ -20,6 +20,11 @@ struct Url {
 HttpError parseUrl(const std::string& text, Url& out);
 std::string toString(const Url& url);
 
+// Strict dotted-quad IPv4 literal ("1.2.3.4") to host byte order: exactly four decimal parts of 0..255, no whitespace,
+// no sign, no trailing dot. A part with a leading zero ("01") is rejected rather than read as octal the way inet_aton
+// would, so a literal never means two things. Anything else is a hostname for the resolver.
+bool parseDottedQuad(const std::string& s, uint32_t& out);
+
 // Resolves a Location header against the URL it came from (RFC 3986 section 5, without the rarely used cases).
 // The result is an absolute URL string that still has to go through parseUrl (so an https target is reported there).
 // Non-http(s) schemes give Parse.

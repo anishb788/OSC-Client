@@ -2,9 +2,12 @@
 // A scripted, deterministic Transport for the HttpTransfer tests. Time is virtual: nothing here ever sleeps, wait()
 // just moves the shared FakeClock forward, so timeout tests run instantly and two transports can share one clock.
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <string>
 #include <vector>
+
+#include <unistd.h>
 
 #include "net/Transport.h"
 
@@ -23,7 +26,16 @@ struct FakeScript {
 	size_t maxPerSend = (size_t)-1;  // largest slice send() accepts
 	bool sendBlocks = false;         // every send() accepts one slice, then WouldBlock until a wait(write)
 	bool sendZero = false;           // send() answers Ok with 0 bytes (a misbehaving transport)
+	bool refuseOnSend = false;       // the first send() fails and refusedOnSend() says why (the real Wii's closed port)
 	int maxWaitMs = 0;               // >0: an idle wait() returns after at most this long (spurious wake-ups)
+};
+
+// Cross-thread observations a Worker test makes about transports it does not own (the worker creates and destroys them).
+struct FakeProbe {
+	std::atomic<int> aborts{0};            // abort() calls
+	std::atomic<int> resolveEntered{0};    // blocking resolves started
+	std::atomic<int> resolveSawCancel{0};  // ... that ended because the cancel flag rose
+	std::atomic<int> resolveSawAbort{0};   // ... that ended because abort() was called
 };
 
 class FakeTransport : public Transport {
@@ -39,13 +51,37 @@ public:
 	int connects = 0;
 	bool open = false;
 	int resolveCostMs = 0;
+	// resolve() blocks in real time (like a stuck net_gethostbyname) until the cancel flag or abort() is seen, as the Wii
+	// backend does, and then returns Cancelled / NoNetwork.
+	bool resolveBlocks = false;
+	FakeProbe* probe = nullptr;
 	// Server side of the live connection: add more bytes later (a stalled script) or hang up.
 	void append(const std::string& more) { cur().response += more; }
 	void hangUp() { cur().closeAtEnd = true; }
 
 	uint64_t nowMs() override { return clock_.now; }
 
+	void setCancel(const std::atomic<bool>* c) override { cancel_ = c; }
+	void abort() override {
+		aborted_.store(true);
+		if (probe) probe->aborts++;
+	}
+
 	HttpError resolve(const std::string& host, uint32_t& ipv4) override {
+		if (resolveBlocks) {
+			if (probe) probe->resolveEntered++;
+			for (;;) {
+				if (aborted_.load()) {
+					if (probe) probe->resolveSawAbort++;
+					return HttpError::NoNetwork;
+				}
+				if (cancel_ && cancel_->load()) {
+					if (probe) probe->resolveSawCancel++;
+					return HttpError::Cancelled;
+				}
+				usleep(2000);
+			}
+		}
 		resolveCalls++;
 		resolvedHosts.push_back(host);
 		clock_.now += resolveCostMs;
@@ -75,7 +111,13 @@ public:
 		return ConnectState::Connected;
 	}
 
+	bool refusedOnSend() const override { return refused_; }
+
 	IoResult send(const uint8_t* data, size_t len) override {
+		if (cur().refuseOnSend) {
+			refused_ = true;
+			return {IoStatus::Error, 0};
+		}
 		if (cur().sendZero) return {IoStatus::Ok, 0};
 		if (cur().sendBlocks && !writable_) return {IoStatus::WouldBlock, 0};
 		size_t n = std::min(len, cur().maxPerSend);
@@ -120,9 +162,12 @@ private:
 		return connects > 0 ? scripts_[connects - 1] : empty;
 	}
 	FakeClock& clock_;
+	const std::atomic<bool>* cancel_ = nullptr;
+	std::atomic<bool> aborted_{false};
 	std::vector<FakeScript> scripts_;
 	size_t pos_ = 0;
 	int polls_ = 0;
 	bool ready_ = true;
 	bool writable_ = true;
+	bool refused_ = false;
 };

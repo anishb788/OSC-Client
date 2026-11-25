@@ -76,6 +76,9 @@ public:
 			drawTile(app, ui, r, ui.hover(id), L.wideTiles, tiles[i].name, tiles[i].label);
 		}
 
+#ifdef OPENSHOP_DEBUGTOOLS
+		if (ui.pressed(BTN_MINUS)) app.push(makeNetTestScreen()); // debug builds: back to the network test bench
+#endif
 		drawBottomBar(ui);
 		float by = H - theme::bottomBarH + 12;
 		ui.silenceNextActivation(); // quitPrompt() plays the HOME chime instead of the click

@@ -64,6 +64,9 @@ void DevOptions::parseFile(const std::string& text, DevOptions& o) {
 		else if (key == "ratelimit") o.rateLimitSec = parseNonNegative(val);
 		else if (key == "topbar") o.topbarAll = val == "all";
 		else if (key == "perf") o.perf = truthy(val);
+		else if (key == "nettest") o.nettest = val;
+		else if (key == "nettestbg") o.nettestBg = val;
+		else if (key == "nettestquit") o.nettestQuit = truthy(val);
 	}
 }
 
@@ -80,6 +83,9 @@ DevOptions DevOptions::load(const std::string& dataDir) {
 	if (const char* v = std::getenv("OPENSHOP_RATELIMIT"); v && *v) o.rateLimitSec = parseNonNegative(v);
 	if (const char* v = std::getenv("OPENSHOP_TOPBAR"); v && *v) o.topbarAll = std::string(v) == "all";
 	if (const char* v = std::getenv("OPENSHOP_PERF"); v && *v) o.perf = truthy(v);
+	if (const char* v = std::getenv("OPENSHOP_NETTEST"); v && *v) o.nettest = v;
+	if (const char* v = std::getenv("OPENSHOP_NETTESTBG"); v && *v) o.nettestBg = v;
+	if (const char* v = std::getenv("OPENSHOP_NETTESTQUIT"); v && *v) o.nettestQuit = truthy(v);
 	return o;
 }
 
@@ -88,5 +94,6 @@ std::string DevOptions::describe() const {
 	return "screen=" + (screen.empty() ? std::string("(none)") : screen) + " mock=" + (mock ? "1" : "0") +
 	       " offline=" + (offline ? "1" : "0") + " refresh=" + (refresh ? "1" : "0") + " fail=" + failText +
 	       " topbar=" + (topbarAll ? "all" : "default") + " mockdelay=" + std::to_string(mockDelayMs) +
-	       " ratelimit=" + std::to_string(rateLimitSec) + " perf=" + (perf ? "1" : "0");
+	       " ratelimit=" + std::to_string(rateLimitSec) + " perf=" + (perf ? "1" : "0") +
+	       (nettest.empty() && nettestBg.empty() ? std::string() : " nettest=" + nettest + " nettestbg=" + nettestBg + " nettestquit=" + (nettestQuit ? "1" : "0"));
 }

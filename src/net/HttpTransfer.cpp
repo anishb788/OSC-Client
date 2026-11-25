@@ -217,7 +217,7 @@ HttpTransfer::StepResult HttpTransfer::step(const StepBudget& budget) {
 				if (cache_) cache_->put(url_.host, addr_);
 			}
 			HttpError e = tr_.beginConnect(addr_, url_.port);
-			if (e != HttpError::None) return finish(e == HttpError::NoNetwork ? e : HttpError::Connect, "connect start");
+			if (e != HttpError::None) return finish(e == HttpError::NoNetwork || e == HttpError::Cancelled ? e : HttpError::Connect, "connect start");
 			// Neither the blocking DNS lookup nor the connect call counts against the connect timer.
 			mark_ = tr_.nowMs();
 			connectMs_ = 0;
@@ -256,6 +256,7 @@ HttpTransfer::StepResult HttpTransfer::step(const StepBudget& budget) {
 				if (tr_.nowMs() >= deadline_) return pending();
 				waitFor(true);
 			} else {
+				if (sent_ == 0 && tr_.refusedOnSend()) return finish(HttpError::Connect, "connection refused (on the first send)");
 				return finish(HttpError::Io, "send failed");
 			}
 			break;

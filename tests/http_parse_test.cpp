@@ -586,7 +586,29 @@ static void testDescribe() {
 	CHECK(describe(r).find("503") != std::string::npos);
 }
 
+static void testDottedQuad() {
+	uint32_t v = 0;
+	CHECK(httpparse::parseDottedQuad("1.2.3.4", v) && v == 0x01020304u);
+	CHECK(httpparse::parseDottedQuad("0.0.0.0", v) && v == 0);
+	CHECK(httpparse::parseDottedQuad("255.255.255.255", v) && v == 0xFFFFFFFFu);
+	CHECK(httpparse::parseDottedQuad("127.0.0.1", v) && v == 0x7F000001u);
+	// Everything else is a hostname (or garbage) for the resolver; `out` must stay untouched on failure.
+	v = 0xDEADBEEFu;
+	for (const char* bad : {"256.1.1.1", "1.256.1.1", "1.1.1.256", "1.2.3", "1.2.3.4.5", "", "1.2.3.4.", ".1.2.3.4", "1..2.3",
+	                        " 1.2.3.4", "1.2.3.4 ", "1. 2.3.4", "1.2.3.4\n", "-1.2.3.4", "+1.2.3.4", "1.2.3.x", "a.b.c.d",
+	                        "localhost", "1234.1.1.1", "0x7f.0.0.1", "1.2.3.4:80"}) {
+		CHECK(!httpparse::parseDottedQuad(bad, v));
+	}
+	// Leading zeros are rejected (inet_aton would read "010" as octal 8): "0" alone is fine, "00" and "01" are not.
+	CHECK(!httpparse::parseDottedQuad("01.2.3.4", v));
+	CHECK(!httpparse::parseDottedQuad("1.2.3.04", v));
+	CHECK(!httpparse::parseDottedQuad("1.00.3.4", v));
+	CHECK(!httpparse::parseDottedQuad("001.2.3.4", v));
+	CHECK(v == 0xDEADBEEFu);
+}
+
 int main() {
+	testDottedQuad();
 	testUrl();
 	testResolve();
 	testRequest();

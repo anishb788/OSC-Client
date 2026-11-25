@@ -15,6 +15,7 @@
 #include <unistd.h>
 #include <vector>
 
+#include "FakeTransport.h"
 #include "LoopbackServer.h"
 #include "net/HttpPosix.h"
 #include "net/Worker.h"
@@ -453,6 +454,97 @@ static void testHttpCancelAndStop() {
 	CHECK(nowMs() - t0 < 3000);   // hang detector
 }
 
+// A transport stuck in a long non-sliceable resolve (the Wii's DNS / init wait) must still honour a job-level cancel,
+// and Worker::stop() must abort it.
+static void testCancelDuringBlockingResolve() {
+	FakeClock clock;
+	FakeProbe probe;
+	std::atomic<int> resultError{-1};
+	auto factory = [&]() -> std::unique_ptr<Transport> {
+		auto t = std::make_unique<FakeTransport>(clock, std::vector<FakeScript>{});
+		t->resolveBlocks = true;
+		t->probe = &probe;
+		return t;
+	};
+	auto makeJob = [&](std::atomic<int>& err) {
+		HttpRequest req;
+		req.url = "http://example.test/x";
+		return std::make_unique<HttpGetJob>(req, std::make_unique<MemorySink>(),
+			[&err](HttpSink&, const HttpResult& r, JobContext&) { err = static_cast<int>(r.error); });
+	};
+	{
+		Worker w(factory, false);
+		w.start();
+		JobId id = w.submit(JobClass::Catalog, "dns", makeJob(resultError));
+		CHECK(waitFor(w, 5000, [&] { return probe.resolveEntered == 1; }));
+		usleep(30000);   // really inside the blocking call now
+		CHECK(w.pending() == 1);
+		int64_t t0 = nowMs();
+		CHECK(w.cancel(id));
+		CHECK(waitFor(w, 3000, [&] { return w.pending() == 0; }));
+		CHECK(nowMs() - t0 < 1000);
+		CHECK(probe.resolveSawCancel == 1 && probe.resolveSawAbort == 0);
+		CHECK(resultError == static_cast<int>(HttpError::Cancelled));
+		CHECK(probe.aborts == 0);
+
+		// dropWhere raises the same flag.
+		std::atomic<int> err2{-1};
+		w.submit(JobClass::Icon, "dns2", makeJob(err2));
+		CHECK(waitFor(w, 5000, [&] { return probe.resolveEntered == 2; }));
+		CHECK(w.dropWhere([](const JobInfo& i) { return i.tag == "dns2"; }) == 1);
+		CHECK(waitFor(w, 3000, [&] { return w.pending() == 0; }));
+		CHECK(probe.resolveSawCancel == 2 && err2 == static_cast<int>(HttpError::Cancelled));
+	}
+	{
+		// stop() calls abort() on every live transport, which frees a resolve that nobody cancelled.
+		FakeProbe p2;
+		auto f2 = [&]() -> std::unique_ptr<Transport> {
+			auto t = std::make_unique<FakeTransport>(clock, std::vector<FakeScript>{});
+			t->resolveBlocks = true;
+			t->probe = &p2;
+			return t;
+		};
+		std::atomic<int> err3{-1}, err4{-1};
+		Worker w(f2, false);
+		w.start();
+		w.submit(JobClass::Catalog, "a", makeJob(err3));
+		CHECK(waitFor(w, 5000, [&] { return p2.resolveEntered == 1; }));
+		w.submit(JobClass::Background, "b", makeJob(err4));   // queued behind it: no transport yet when stop() runs
+		int64_t t0 = nowMs();
+		w.stop();
+		CHECK(nowMs() - t0 < 3000);
+		CHECK(p2.aborts >= 1);
+		CHECK(p2.resolveSawAbort >= 1);
+	}
+}
+
+// stop() running while the factory is still building a transport: the transport is not visible to stop()'s abort loop,
+// so the worker must abort it itself once it is created.
+static void testStopRacesTransportCreation() {
+	FakeClock clock;
+	FakeProbe probe;
+	std::atomic<int> factoryEntered{0};
+	auto factory = [&]() -> std::unique_ptr<Transport> {
+		factoryEntered++;
+		usleep(300000);
+		auto t = std::make_unique<FakeTransport>(clock, std::vector<FakeScript>{});
+		t->probe = &probe;
+		return t;
+	};
+	std::atomic<int> err{-1};
+	Worker w(factory, false);
+	w.start();
+	HttpRequest req;
+	req.url = "http://example.test/x";
+	w.submit(JobClass::Catalog, "late", std::make_unique<HttpGetJob>(req, std::make_unique<MemorySink>(),
+		[&err](HttpSink&, const HttpResult& r, JobContext&) { err = static_cast<int>(r.error); }));
+	CHECK(waitFor(w, 5000, [&] { return factoryEntered == 1; }));
+	w.stop();   // the factory is mid-sleep on the worker thread
+	CHECK(probe.aborts == 1);
+	CHECK(err != -1);   // the job still finished through its own path
+	CHECK(w.pending() == 0);
+}
+
 int main() {
 	alarm(120);   // a hang kills the run instead of blocking CI
 	testLifecycle();
@@ -468,6 +560,8 @@ int main() {
 	testStopIsFast();
 	testHttpJobs();
 	testHttpCancelAndStop();
+	testCancelDuringBlockingResolve();
+	testStopRacesTransportCreation();
 	if (failures) {
 		std::printf("%d failure(s)\n", failures.load());
 		return 1;

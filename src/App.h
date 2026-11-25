@@ -12,6 +12,7 @@
 #include "core/DevOptions.h"
 #include "gfx/Gfx.h"
 #include "gfx/Text.h"
+#include "net/NetSelfTest.h"
 #include "net/Worker.h"
 #include "ui/Ui.h"
 #include "ui/Widgets.h"
@@ -139,6 +140,8 @@ private:
 
 	Catalog catalog_;
 	net::Worker worker_{net::defaultTransportFactory()};
+	// Dev-only (nettest= in devstart); null normally. Declared after the worker so it is destroyed first.
+	std::unique_ptr<net::NetSelfTest> netTest_;
 	// Which LoadingScreen may install, the load token, the generation and the last network fetch (host-tested).
 	LoadTracker loads;
 	std::vector<std::unique_ptr<Screen>> stack;
@@ -171,3 +174,7 @@ std::unique_ptr<Screen> makeListScreen(std::string title, std::vector<const AppE
                                        std::string emptyMessage = "No apps here yet.");
 std::unique_ptr<Screen> makeDetailScreen(const AppEntry& app);
 std::unique_ptr<Screen> makeSearchScreen();
+#ifdef OPENSHOP_DEBUGTOOLS
+// Debug builds only: the on-screen network test bench (screens/NetTestScreen.cpp). Opens at startup; Minus on Home.
+std::unique_ptr<Screen> makeNetTestScreen();
+#endif

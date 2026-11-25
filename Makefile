@@ -41,7 +41,14 @@ ifeq ($(WERROR),1)
 WARN	+=	-Werror
 endif
 
-CFLAGS	= -g -O2 $(WARN) $(MACHDEP) $(INCLUDE) $(PKG_CFLAGS)
+# DEBUGTOOLS=1 (e.g. `./dev build DEBUGTOOLS=1`) builds the hardware test build: on-screen network test bench and
+# debuglog.txt (see src/core/DebugLog.h). Run `make clean` when switching, since objects don't track this flag.
+DEFS	:=
+ifeq ($(DEBUGTOOLS),1)
+DEFS	+=	-DOPENSHOP_DEBUGTOOLS
+endif
+
+CFLAGS	= -g -O2 $(WARN) $(DEFS) $(MACHDEP) $(INCLUDE) $(PKG_CFLAGS)
 CXXFLAGS	=	$(CFLAGS) -std=gnu++20
 ASFLAGS	=	-g $(MACHDEP) -Wa,-I$(ROOTDIR)
 

@@ -65,6 +65,55 @@ static void testDevOptions() {
 	CHECK(parse("perf=1").describe().find("perf=1") != std::string::npos);
 	CHECK(parse("fail=both\nmockdelay=900\n").describe().find("fail=both") != std::string::npos);
 	CHECK(parse("fail=refresh").describe().find("fail=refresh") != std::string::npos);
+
+	// The network self-test is off unless asked for, and does not show in describe() then.
+	o = parse("screen=home");
+	CHECK(o.nettest.empty() && o.nettestBg.empty() && !o.nettestQuit);
+	o = parse("nettest=http://127.0.0.1:8099/len/10,http://x/y\nnettestbg=http://h/big\nnettestquit=1\n");
+	CHECK(o.nettest == "http://127.0.0.1:8099/len/10,http://x/y");
+	CHECK(o.nettestBg == "http://h/big");
+	CHECK(o.nettestQuit);
+	CHECK(o.describe().find("nettestquit=1") != std::string::npos);
+
+	// describe() with only nettestbg set still shows the group (with an empty nettest and quit off).
+	o = parse("nettestbg=http://h/big\n");
+	CHECK(o.describe().find("nettest= nettestbg=http://h/big nettestquit=0") != std::string::npos);
+	CHECK(parse("nettest=http://h/x\n").describe().find("nettest=http://h/x nettestbg= nettestquit=0") != std::string::npos);
+}
+
+// The environment path (PC): OPENSHOP_NETTEST / NETTESTBG / NETTESTQUIT, and what wins over devstart.
+static void testNetTestEnv() {
+	const char* names[] = {"OPENSHOP_NETTEST", "OPENSHOP_NETTESTBG", "OPENSHOP_NETTESTQUIT"};
+	for (const char* n : names) unsetenv(n);
+	const std::string noDir = "/nonexistent-openshop-dir";
+
+	DevOptions o = DevOptions::load(noDir);
+	CHECK(o.nettest.empty() && o.nettestBg.empty() && !o.nettestQuit);
+
+	setenv("OPENSHOP_NETTEST", "http://h/a,waitbg", 1);
+	setenv("OPENSHOP_NETTESTBG", "http://h/big", 1);
+	setenv("OPENSHOP_NETTESTQUIT", "1", 1);
+	o = DevOptions::load(noDir);
+	CHECK(o.nettest == "http://h/a,waitbg" && o.nettestBg == "http://h/big" && o.nettestQuit);
+
+	// nettestquit=0 means off (not "any non-empty value"), and an empty variable is ignored.
+	setenv("OPENSHOP_NETTESTQUIT", "0", 1);
+	CHECK(!DevOptions::load(noDir).nettestQuit);
+	setenv("OPENSHOP_NETTESTQUIT", "off", 1);
+	CHECK(!DevOptions::load(noDir).nettestQuit);
+	setenv("OPENSHOP_NETTESTQUIT", "", 1);
+	CHECK(!DevOptions::load(noDir).nettestQuit);
+	setenv("OPENSHOP_NETTEST", "", 1);
+	CHECK(DevOptions::load(noDir).nettest.empty());
+
+	// Only nettestbg set: describe() reports it.
+	unsetenv("OPENSHOP_NETTEST");
+	unsetenv("OPENSHOP_NETTESTQUIT");
+	o = DevOptions::load(noDir);
+	CHECK(o.nettest.empty() && o.nettestBg == "http://h/big");
+	CHECK(o.describe().find("nettestbg=http://h/big") != std::string::npos);
+
+	for (const char* n : names) unsetenv(n);
 }
 
 static void testInstallGuard() {
@@ -191,6 +240,7 @@ static void testLoadTracker() {
 
 int main() {
 	testDevOptions();
+	testNetTestEnv();
 	testInstallGuard();
 	testLoadTracker();
 	testRefreshRateLimit();

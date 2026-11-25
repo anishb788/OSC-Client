@@ -1,4 +1,5 @@
 #include "App.h"
+#include "core/DebugLog.h"
 
 #include <cstdio>
 #include <ctime>
@@ -12,6 +13,7 @@
 #include "core/Log.h"
 #include "core/Version.h"
 #include "gfx/Theme.h"
+#include "net/HttpWii.h"
 #include "platform/Platform.h"
 #include "ui/Widgets.h"
 
@@ -34,6 +36,11 @@ bool App::init(int argc, char** argv) {
 		return false;
 	}
 	platform::init(argc, argv);
+#ifdef OPENSHOP_DEBUGTOOLS
+	debuglog::init(); // before the worker thread exists
+	debuglog::openFile(platform::dataDir() + "/debuglog.txt");
+	LOG("[debug] DEBUG BUILD (DEBUGTOOLS=1): every log line goes to the screen and to debuglog.txt");
+#endif
 	if (!gfx.init(platform::widescreen(), 2)) return false;
 	// Corner masks for every radius the UI reaches, hover growth, focus glow and shadow spread included (the largest
 	// is the 54 px Download capsule's shadow, 27 + 2 + 6). Built here once so hovering never creates textures mid-frame.
@@ -45,6 +52,11 @@ bool App::init(int argc, char** argv) {
 	opts = DevOptions::load(platform::dataDir());
 	// The app stays usable without it, but submit() then returns 0 and nothing network-related can run.
 	if (!worker_.start()) LOG("ERROR: the net worker failed to start; every network job will be rejected (worker().running() is false)");
+	if (!opts.nettest.empty() || !opts.nettestBg.empty()) {
+		std::string script = opts.nettestBg.empty() ? opts.nettest : "bg:" + opts.nettestBg + (opts.nettest.empty() ? "" : "," + opts.nettest);
+		net::nettestLogTo(platform::dataDir() + "/nettest.txt");
+		netTest_ = std::make_unique<net::NetSelfTest>(worker_, script, opts.nettestQuit);
+	}
 	LOG("OpenShop %s, User-Agent: %s", OPENSHOP_VERSION, userAgent());
 	LOG("Dev options: %s", opts.describe().c_str());
 	LOG("jansson %s", JANSSON_VERSION);
@@ -61,6 +73,12 @@ bool App::init(int argc, char** argv) {
 // so the app opens straight on the screen being worked on.
 void App::openDevStartScreen() {
 	const std::string& which = opts.screen;
+#ifdef OPENSHOP_DEBUGTOOLS
+	if (which.empty()) {
+		stack.push_back(makeNetTestScreen());
+		return;
+	}
+#endif
 	if (which.empty() || which == "home") return;
 	LOG("Dev start screen: %s", which.c_str());
 
@@ -73,7 +91,17 @@ void App::openDevStartScreen() {
 
 void App::shutdown() {
 	// First, while the SDL timer and threads still exist: cancels and joins any in-flight transfer.
+	uint32_t stopT0 = SDL_GetTicks();
 	worker_.stop();
+	if (netTest_) NTLOG("[nettest] net worker stopped in %u ms", SDL_GetTicks() - stopT0);
+	// Before SDL goes away; skips net_deinit (and says why) when init or a DNS lookup is still live in IOS. No-op on PC.
+	const char* netDown = net::shutdown();
+	if (netTest_) NTLOG("[nettest] net shutdown: %s", netDown);
+	if (netTest_) net::nettestLogTo("");
+#ifdef OPENSHOP_DEBUGTOOLS
+	LOG("[debug] worker stopped in %u ms; net shutdown: %s; exiting", SDL_GetTicks() - stopT0, netDown);
+	debuglog::closeFile();
+#endif
 	stack.clear();
 	IMG_Quit();
 	audio::shutdown();
@@ -234,6 +262,10 @@ void App::run() {
 		platform::poll(in, dt, gfx.width());
 		if (in.quit) break;
 		worker_.drainResults();
+#ifdef OPENSHOP_DEBUGTOOLS
+		debuglog::pump();
+#endif
+		if (netTest_ && netTest_->tick(dt)) quitRequested = true;
 
 		// Transitions: fade to white, swap screens, fade back in.
 		if (fadeDir != 0) {

@@ -118,6 +118,28 @@ HttpError parseUrl(const std::string& text, Url& out) {
 	return HttpError::None;
 }
 
+bool parseDottedQuad(const std::string& s, uint32_t& out) {
+	uint32_t v = 0;
+	size_t i = 0;
+	for (int part = 0; part < 4; part++) {
+		if (part > 0) {
+			if (i >= s.size() || s[i] != '.') return false;
+			i++;
+		}
+		size_t start = i;
+		uint32_t n = 0;
+		while (i < s.size() && s[i] >= '0' && s[i] <= '9') {
+			n = n * 10 + static_cast<uint32_t>(s[i++] - '0');
+			if (i - start > 3 || n > 255) return false;
+		}
+		if (i == start || (i - start > 1 && s[start] == '0')) return false;
+		v = (v << 8) | n;
+	}
+	if (i != s.size()) return false;
+	out = v;
+	return true;
+}
+
 std::string toString(const Url& url) {
 	std::string s = "http://" + url.host;
 	if (url.port != 80) s += ":" + std::to_string(url.port);

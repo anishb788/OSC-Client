@@ -10,6 +10,7 @@
 
 #include "core/Log.h"
 #include "net/HttpPosix.h"
+#include "net/HttpWii.h"
 
 namespace net {
 
@@ -29,7 +30,7 @@ struct Lock {
 	SDL_mutex* m_;
 };
 
-// Stands in when no real transport exists (the Wii before Increment 7): every request fails as NoNetwork.
+// Stands in when the factory is empty or returns null: every request fails as NoNetwork.
 class NoNetworkTransport : public Transport {
 public:
 	uint64_t nowMs() override { return SDL_GetTicks(); }
@@ -48,7 +49,7 @@ Worker::TransportFactory defaultTransportFactory() {
 #ifndef __wii__
 	return [] { return makePosixTransport(); };
 #else
-	return nullptr;   // Increment 7: libogc net_* transport
+	return [] { return makeWiiTransport(); };
 #endif
 }
 
@@ -83,7 +84,7 @@ struct Worker::Entry {
 	bool active = false;        // under the Worker lock
 	uint32_t lastRun = 0;       // SDL ticks; under the Worker lock
 	int cancelSteps = 0;        // steps taken since the cancel flag was seen; worker thread only
-	std::unique_ptr<Transport> transport;   // worker thread only
+	std::unique_ptr<Transport> transport;   // created and destroyed on the worker thread; assigned under the lock
 	std::unique_ptr<Job> job;
 };
 
@@ -122,7 +123,12 @@ void Worker::stop() {
 	{
 		Lock l(mutex_);
 		stopping_ = true;
-		for (auto& e : entries_) e->cancel.store(true, std::memory_order_relaxed);
+		for (auto& e : entries_) {
+			e->cancel.store(true, std::memory_order_relaxed);
+			// Lets a backend stuck in an uninterruptible call (libogc DNS, net init) give up so the join below
+			// returns. Safe under the lock: an entry leaves entries_ (under it) before its transport is destroyed.
+			if (e->transport) e->transport->abort();
+		}
 		t = thread_;
 		thread_ = nullptr;
 		SDL_CondBroadcast(cond_);
@@ -221,10 +227,22 @@ size_t Worker::drainResults() {
 }
 
 int Worker::threadMain(void* self) {
-	// Below the render thread so a busy network never costs frames. On the Wii port this maps to an LWP priority; see
-	// the note in Increment 6 of increments.md for what was and wasn't verified.
+	// Below the render thread so a busy network never costs frames.
 	Worker* w = static_cast<Worker*>(self);
-	if (w->lowPriority_) SDL_SetThreadPriority(SDL_THREAD_PRIORITY_LOW);
+	if (w->lowPriority_) {
+		SDL_SetThreadPriority(SDL_THREAD_PRIORITY_LOW);
+#ifdef __wii__
+		// Nothing more to do on the Wii, and that is verified, not assumed (disassembly of libSDL2.a and libogc.a):
+		// SDL_SYS_SetThreadPriority is an empty function there, but SDL threads are pthreads and libogc's
+		// __syscall_thread_create starts every pthread at the scheduler's lowest priority (127 in tuxedo terms,
+		// which is LWP priority 0). So the worker is already below the render thread without any call. Do NOT
+		// "fix" this with LWP_SetThreadPriority(LWP_GetSelf(), n): n = LWP priority, and a high n would put the
+		// worker above the main thread. The requested stack size is honoured (pthread_attr_setstacksize; the
+		// default would be 64 KB). The marker below shows the real stack address range in the log.
+		int marker = 0;
+		LOG("net worker: Wii thread started, requested stack %u bytes, a local lives at %p", static_cast<unsigned>(kStackBytes), static_cast<void*>(&marker));
+#endif
+	}
 	w->loop();
 	return 0;
 }
@@ -310,8 +328,14 @@ void Worker::loop() {
 			done = true;
 		} else {
 			if (!e->transport) {
-				e->transport = factory_ ? factory_() : nullptr;
-				if (!e->transport) e->transport = std::make_unique<NoNetworkTransport>();
+				std::unique_ptr<Transport> t = factory_ ? factory_() : nullptr;
+				if (!t) t = std::make_unique<NoNetworkTransport>();
+				// So a job-level cancel() also ends a backend's long init / DNS wait, not only stop().
+				t->setCancel(&e->cancel);
+				Lock l(mutex_);
+				// stop() may have run between the check above and now, before this transport was visible to it.
+				if (stopping_) t->abort();
+				e->transport = std::move(t);
 			}
 			JobContext ctx(*this, e->id, *e->transport, hosts_, &e->cancel, e->progress, StepBudget());
 			uint32_t t0 = SDL_GetTicks();

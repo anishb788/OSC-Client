@@ -623,6 +623,20 @@ static void testZeroByteSend() {
 	CHECK(n < 100000 && t.result().error == HttpError::Timeout);
 }
 
+// A real Wii "connects" to a closed port and fails on the first send: that must read as Connect, not Io.
+static void testRefusedOnFirstSend() {
+	FakeClock clock;
+	FakeScript s;
+	s.refuseOnSend = true;
+	FakeTransport tr(clock, {s});
+	MemorySink sink;
+	HttpRequest req;
+	req.url = "http://example.org/";
+	HttpTransfer t(req, sink, nullptr, nullptr, tr);
+	while (t.step() == HttpTransfer::StepResult::Pending) {}
+	CHECK(t.result().error == HttpError::Connect);
+}
+
 int main() {
 	testBudgetsAgree();
 	testByteBudgetBounds();
@@ -639,6 +653,7 @@ int main() {
 	testRedirectHeaders();
 	testWaitBoundedByTimers();
 	testZeroByteSend();
+	testRefusedOnFirstSend();
 	if (failures) {
 		std::printf("%d check(s) failed\n", failures);
 		return 1;

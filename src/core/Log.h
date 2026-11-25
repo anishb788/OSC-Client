@@ -12,8 +12,20 @@
 //   PC:   stderr
 #ifdef __wii__
 #include <ogc/system.h>
-#define LOG(fmt, ...) SYS_Report("[%s:%d] " fmt "\n", OPENSHOP_LOG_FILE, __LINE__, ##__VA_ARGS__)
+#define OPENSHOP_LOG_RAW(fmt, ...) SYS_Report("[%s:%d] " fmt "\n", OPENSHOP_LOG_FILE, __LINE__, ##__VA_ARGS__)
 #else
 #include <cstdio>
-#define LOG(fmt, ...) std::fprintf(stderr, "[%s:%d] " fmt "\n", OPENSHOP_LOG_FILE, __LINE__, ##__VA_ARGS__)
+#define OPENSHOP_LOG_RAW(fmt, ...) std::fprintf(stderr, "[%s:%d] " fmt "\n", OPENSHOP_LOG_FILE, __LINE__, ##__VA_ARGS__)
+#endif
+
+// Debug builds (DEBUGTOOLS=1) also keep every line for the on-screen log and debuglog.txt (core/DebugLog.h).
+#ifdef OPENSHOP_DEBUGTOOLS
+#include "core/DebugLog.h"
+#define LOG(fmt, ...)                                                                        \
+	do {                                                                                     \
+		OPENSHOP_LOG_RAW(fmt, ##__VA_ARGS__);                                                \
+		::debuglog::push("[%s:%d] " fmt, OPENSHOP_LOG_FILE, __LINE__, ##__VA_ARGS__);        \
+	} while (0)
+#else
+#define LOG(fmt, ...) OPENSHOP_LOG_RAW(fmt, ##__VA_ARGS__)
 #endif

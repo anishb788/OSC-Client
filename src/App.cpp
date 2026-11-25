@@ -43,6 +43,7 @@ bool App::init(int argc, char** argv) {
 	writeLastRunProbe();
 
 	opts = DevOptions::load(platform::dataDir());
+	if (!worker_.start()) LOG("net worker failed to start; network jobs will not run");
 	LOG("OpenShop %s, User-Agent: %s", OPENSHOP_VERSION, userAgent());
 	LOG("Dev options: %s", opts.describe().c_str());
 	LOG("jansson %s", JANSSON_VERSION);
@@ -70,6 +71,8 @@ void App::openDevStartScreen() {
 }
 
 void App::shutdown() {
+	// First, while the SDL timer and threads still exist: cancels and joins any in-flight transfer.
+	worker_.stop();
 	stack.clear();
 	IMG_Quit();
 	audio::shutdown();
@@ -229,6 +232,7 @@ void App::run() {
 
 		platform::poll(in, dt, gfx.width());
 		if (in.quit) break;
+		worker_.drainResults();
 
 		// Transitions: fade to white, swap screens, fade back in.
 		if (fadeDir != 0) {

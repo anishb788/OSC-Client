@@ -75,6 +75,29 @@ $(HTTPTRANSFERTEST): tests/http_transfer_test.cpp tests/FakeTransport.h src/net/
 	@mkdir -p $(dir $@)
 	$(CXX) $(TESTCXX) -Itests -o $@ tests/http_transfer_test.cpp src/net/HttpTransfer.cpp src/net/HttpParse.cpp src/net/Sinks.cpp
 
+# Real sockets over loopback (a server thread inside the test), so -pthread. No SDL.
+HTTPPOSIXTEST := $(BUILD)/tests/http_posix_test
+NETSRCS := src/net/HttpTransfer.cpp src/net/HttpPosix.cpp src/net/HttpParse.cpp src/net/Sinks.cpp
+NETDEPS := $(NETSRCS) src/net/HttpTransfer.h src/net/HttpPosix.h src/net/Transport.h src/net/HttpParse.h src/net/Http.h src/core/Log.h src/core/Version.h tests/LoopbackServer.h
+
+$(HTTPPOSIXTEST): tests/http_posix_test.cpp $(NETDEPS)
+	@mkdir -p $(dir $@)
+	$(CXX) $(TESTCXX) -Itests -pthread -o $@ tests/http_posix_test.cpp $(NETSRCS)
+
+# The worker uses SDL threads and mutexes (no SDL_Init), so this one links SDL like gfx_test.
+WORKERTEST := $(BUILD)/tests/worker_test
+
+$(WORKERTEST): tests/worker_test.cpp src/net/Worker.cpp src/net/Worker.h $(NETDEPS)
+	@mkdir -p $(dir $@)
+	$(CXX) $(TESTCXX) -Itests -pthread $(shell pkg-config --cflags sdl2) -o $@ tests/worker_test.cpp src/net/Worker.cpp $(NETSRCS) $(shell pkg-config --libs sdl2)
+
+# Dev tool, built by `make test` but not run (it needs a URL). See the header comment in the file.
+HTTPGET := $(BUILD)/tests/httpget
+
+$(HTTPGET): tests/httpget.cpp src/net/Worker.cpp src/net/Worker.h $(NETDEPS)
+	@mkdir -p $(dir $@)
+	$(CXX) $(TESTCXX) -pthread $(shell pkg-config --cflags sdl2) -o $@ tests/httpget.cpp src/net/Worker.cpp $(NETSRCS) $(shell pkg-config --libs sdl2)
+
 # The one test that needs SDL: draws the button helpers into a software renderer (no window, no display).
 GFXTEST := $(BUILD)/tests/gfx_test
 
@@ -82,13 +105,15 @@ $(GFXTEST): tests/gfx_test.cpp src/gfx/Gfx.cpp src/gfx/Gfx.h src/gfx/Theme.h src
 	@mkdir -p $(dir $@)
 	$(CXX) $(TESTCXX) $(shell pkg-config --cflags sdl2) -o $@ tests/gfx_test.cpp src/gfx/Gfx.cpp $(shell pkg-config --libs sdl2) -lm
 
-test: $(TESTBIN) $(CORETEST) $(TOPBARTEST) $(LAYOUTTEST) $(HTTPPARSETEST) $(HTTPTRANSFERTEST) $(GFXTEST)
+test: $(TESTBIN) $(CORETEST) $(TOPBARTEST) $(LAYOUTTEST) $(HTTPPARSETEST) $(HTTPTRANSFERTEST) $(HTTPPOSIXTEST) $(WORKERTEST) $(HTTPGET) $(GFXTEST)
 	$(TESTBIN)
 	$(CORETEST)
 	$(TOPBARTEST)
 	$(LAYOUTTEST)
 	$(HTTPPARSETEST)
 	$(HTTPTRANSFERTEST)
+	$(HTTPPOSIXTEST)
+	$(WORKERTEST)
 	$(GFXTEST)
 
 clean:

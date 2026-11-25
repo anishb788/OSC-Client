@@ -12,6 +12,7 @@
 #include "core/DevOptions.h"
 #include "gfx/Gfx.h"
 #include "gfx/Text.h"
+#include "net/Worker.h"
 #include "ui/Ui.h"
 #include "ui/Widgets.h"
 
@@ -76,6 +77,10 @@ public:
 	const Catalog& catalog{catalog_};
 	DevOptions opts; // parsed once in init()
 
+	// The one network worker (started in init(), stopped first thing in shutdown()). Nothing submits to it yet. Its
+	// rules, including "jobs never hold catalog pointers", are in net/Worker.h.
+	net::Worker& worker() { return worker_; }
+
 	bool init(int argc, char** argv);
 	void run();
 	void shutdown();
@@ -132,6 +137,7 @@ private:
 	void comingSoon(const char* what);
 
 	Catalog catalog_;
+	net::Worker worker_{net::defaultTransportFactory()};
 	// Which LoadingScreen may install, the load token, the generation and the last network fetch (host-tested).
 	LoadTracker loads;
 	std::vector<std::unique_ptr<Screen>> stack;

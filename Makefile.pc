@@ -112,6 +112,20 @@ $(OSCAPITEST): tests/oscapi_test.cpp src/catalog/OscApi.cpp src/catalog/OscApi.h
 	@mkdir -p $(dir $@)
 	$(CXX) $(TESTCXX) $(shell pkg-config --cflags jansson) -o $@ tests/oscapi_test.cpp src/catalog/OscApi.cpp src/catalog/Catalog.cpp $(shell pkg-config --libs jansson)
 
+# The live catalog loader against the loopback server (real fixtures) and FakeTransport. Reads tests/fixtures/.
+NETLOADERTEST := $(BUILD)/tests/netloader_test
+
+$(NETLOADERTEST): tests/netloader_test.cpp src/catalog/NetLoader.cpp src/catalog/NetLoader.h src/catalog/CatalogLoader.h src/catalog/CatalogLoader.cpp src/catalog/MockLoader.cpp src/catalog/MockCatalog.cpp src/core/DevOptions.cpp src/catalog/OscApi.cpp src/catalog/OscApi.h src/catalog/Catalog.cpp src/catalog/Catalog.h src/net/Worker.cpp src/net/Worker.h tests/FakeTransport.h $(NETDEPS) $(wildcard tests/fixtures/*)
+	@mkdir -p $(dir $@)
+	$(CXX) $(TESTCXX) -Itests -pthread $(shell pkg-config --cflags sdl2 jansson) -o $@ tests/netloader_test.cpp src/catalog/NetLoader.cpp src/catalog/CatalogLoader.cpp src/catalog/MockLoader.cpp src/catalog/MockCatalog.cpp src/core/DevOptions.cpp src/catalog/OscApi.cpp src/catalog/Catalog.cpp src/net/Worker.cpp $(NETSRCS) $(shell pkg-config --libs sdl2 jansson)
+
+# Word wrapping (header only, fake font).
+WRAPTEST := $(BUILD)/tests/wrap_test
+
+$(WRAPTEST): tests/wrap_test.cpp src/gfx/Wrap.h
+	@mkdir -p $(dir $@)
+	$(CXX) $(TESTCXX) -o $@ tests/wrap_test.cpp
+
 # Dev tool, built by `make test` but not run (it needs a URL). See the header comment in the file.
 HTTPGET := $(BUILD)/tests/httpget
 
@@ -126,7 +140,7 @@ $(GFXTEST): tests/gfx_test.cpp src/gfx/Gfx.cpp src/gfx/Gfx.h src/gfx/Theme.h src
 	@mkdir -p $(dir $@)
 	$(CXX) $(TESTCXX) $(shell pkg-config --cflags sdl2) -o $@ tests/gfx_test.cpp src/gfx/Gfx.cpp $(shell pkg-config --libs sdl2) -lm
 
-test: $(TESTBIN) $(CORETEST) $(TOPBARTEST) $(LAYOUTTEST) $(HTTPPARSETEST) $(HTTPTRANSFERTEST) $(HTTPPOSIXTEST) $(WORKERTEST) $(NETTESTTEST) $(OSCAPITEST) $(HTTPGET) $(GFXTEST)
+test: $(TESTBIN) $(CORETEST) $(TOPBARTEST) $(LAYOUTTEST) $(HTTPPARSETEST) $(HTTPTRANSFERTEST) $(HTTPPOSIXTEST) $(WORKERTEST) $(NETTESTTEST) $(OSCAPITEST) $(NETLOADERTEST) $(WRAPTEST) $(HTTPGET) $(GFXTEST)
 	$(TESTBIN)
 	$(CORETEST)
 	$(TOPBARTEST)
@@ -137,6 +151,8 @@ test: $(TESTBIN) $(CORETEST) $(TOPBARTEST) $(LAYOUTTEST) $(HTTPPARSETEST) $(HTTP
 	$(WORKERTEST)
 	$(NETTESTTEST)
 	$(OSCAPITEST)
+	$(NETLOADERTEST)
+	$(WRAPTEST)
 	$(GFXTEST)
 
 clean:

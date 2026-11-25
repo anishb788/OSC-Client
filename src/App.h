@@ -78,7 +78,7 @@ public:
 	const Catalog& catalog{catalog_};
 	DevOptions opts; // parsed once in init()
 
-	// The one network worker (started in init(), stopped first thing in shutdown()). Nothing submits to it yet. Its
+	// The one network worker (started in init(), stopped first thing in shutdown()). The catalog loader submits to it. Its
 	// rules, including "jobs never hold catalog pointers", are in net/Worker.h. If start() failed, running() is false
 	// and submit() returns 0: callers must show an error instead of waiting on a job that will never run.
 	net::Worker& worker() { return worker_; }
@@ -136,6 +136,7 @@ private:
 	// (including a finished Progress dialog showing its "done" message) is dropped without calling onChoose.
 	void dropDialog();
 	void openDevStartScreen();
+	void autoRefreshTick();
 	void comingSoon(const char* what);
 
 	Catalog catalog_;
@@ -144,6 +145,7 @@ private:
 	std::unique_ptr<net::NetSelfTest> netTest_;
 	// Which LoadingScreen may install, the load token, the generation and the last network fetch (host-tested).
 	LoadTracker loads;
+	uint32_t homeSinceMs_ = 0; // autorefresh dev hook: when Home became the only screen (0 = not now)
 	std::vector<std::unique_ptr<Screen>> stack;
 	std::unique_ptr<Screen> pendingPush;
 	std::unique_ptr<Screen> pendingReset;

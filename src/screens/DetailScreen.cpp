@@ -1,8 +1,11 @@
 #include <algorithm>
+#include <memory>
 
 #include "App.h"
 #include "audio/Audio.h"
+#include "core/Log.h"
 #include "gfx/Theme.h"
+#include "gfx/Wrap.h"
 #include "ui/Widgets.h"
 
 namespace {
@@ -70,10 +73,28 @@ public:
 		ui.g.fillRoundRect(box, 12, theme::panel);
 		const int fs = 15;
 		float lh = (float)ui.t.lineHeight(Font::Medium, fs);
-		if (wrappedW != (int)box.w) {
+		// The wrapped lines are keyed on the entry and the width. The wrap runs a few ms per frame (the live catalog has
+		// descriptions of 27 KB), so the panel fills in over a few frames instead of stalling one.
+		if (!wrap_ || wrappedFor_ != &a || wrappedW != (int)box.w) {
+			wrappedFor_ = &a;
 			wrappedW = (int)box.w;
-			lines = ui.t.wrap(Font::Medium, fs, a.longDesc.empty() ? a.shortDesc : a.longDesc, wrappedW - 56);
+			Text* text = &ui.t;
+			const std::string& src = a.longDesc.empty() ? a.shortDesc : a.longDesc;
+			wrap_ = std::make_unique<textwrap::Wrapper>([text, fs](std::string_view s) { return text->width(Font::Medium, fs, s); }, src,
+			                                            wrappedW - 56);
+			wrapMs_ = 0;
+			wrapFrames_ = 0;
 		}
+		if (!wrap_->done()) {
+			const Uint32 t0 = SDL_GetTicks();
+			wrap_->step([t0] { return SDL_GetTicks() - t0 >= kWrapSliceMs; });
+			wrapMs_ += SDL_GetTicks() - t0;
+			wrapFrames_++;
+			if (wrap_->done())
+				LOG("Detail: wrapped %d bytes into %d lines in %u ms over %d frame(s)", (int)(a.longDesc.empty() ? a.shortDesc : a.longDesc).size(),
+				    (int)wrap_->lines().size(), (unsigned)wrapMs_, wrapFrames_);
+		}
+		const std::vector<std::string>& lines = wrap_->lines();
 		int visible = std::max(1, (int)((box.h - 20) / lh));
 		int maxScroll = std::max(0, (int)lines.size() - visible);
 		bool canScroll = maxScroll > 0;
@@ -145,8 +166,12 @@ private:
 	}
 
 	const AppEntry& app_;
-	std::vector<std::string> lines;
+	static constexpr Uint32 kWrapSliceMs = 6;
+	std::unique_ptr<textwrap::Wrapper> wrap_;
+	const AppEntry* wrappedFor_ = nullptr; // the entry and width the lines belong to
 	int wrappedW = -1;
+	Uint32 wrapMs_ = 0;
+	int wrapFrames_ = 0;
 	int scroll = 0;
 };
 } // namespace

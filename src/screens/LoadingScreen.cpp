@@ -44,7 +44,14 @@ public:
 		}
 
 		if (loader_ && !ready_ && !failed_) {
+			// Longest gap between two frames while loading: a jansson parse on the worker must not stall rendering
+			// (the worker is a low-priority thread, but on the single-core Wii it still takes CPU).
+			const Uint32 now = SDL_GetTicks();
+			if (lastFrameMs_) maxFrameMs_ = std::max(maxFrameMs_, now - lastFrameMs_);
+			lastFrameMs_ = now;
 			LoadStatus st = loader_->poll();
+			if (st.state != LoadStatus::State::Pending)
+				LOG("Catalog load over: longest frame while loading %u ms", (unsigned)maxFrameMs_);
 			if (st.state == LoadStatus::State::Pending) {
 				if (!st.text.empty()) status_ = st.text;
 			} else if (st.state == LoadStatus::State::Failed) {
@@ -94,6 +101,7 @@ private:
 		loader_ = makeCatalogLoader(opts_, attempt_++);
 		status_ = refresh_ ? "Checking for new and updated apps…" : "Loading catalog…";
 		failed_ = false;
+		lastFrameMs_ = maxFrameMs_ = 0;
 	}
 
 	// Startup: the error screen. Refresh: keep the old catalog and go Home with a message.
@@ -157,6 +165,7 @@ private:
 	// failed_: the startup error screen is showing. ready_: the load is over (installed, reused, failed in refresh
 	// mode, or cancelled) and only the handover to Home is left. handedOver_: that reset has been accepted.
 	bool failed_ = false, ready_ = false, handedOver_ = false;
+	Uint32 lastFrameMs_ = 0, maxFrameMs_ = 0;
 };
 } // namespace
 

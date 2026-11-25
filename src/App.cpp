@@ -63,7 +63,9 @@ bool App::init(int argc, char** argv) {
 	if (IMG_Init(IMG_INIT_PNG) & IMG_INIT_PNG) LOG("SDL2_image: PNG support initialised");
 	else LOG("SDL2_image: IMG_Init(PNG) failed: %s", IMG_GetError());
 
-	auto loading = makeLoadingScreen(LoaderOptions::from(opts));
+	LoaderOptions startup = LoaderOptions::from(opts);
+	startup.worker = &worker_;
+	auto loading = makeLoadingScreen(startup);
 	loads.recordStartupScreen(loading.get());
 	stack.push_back(std::move(loading));
 	return true;
@@ -152,6 +154,7 @@ bool App::refreshCatalog() {
 	if (dialog) { LOG("Refresh ignored: a dialog is open"); return false; }
 	LoaderOptions lo = LoaderOptions::from(opts);
 	lo.mode = LoaderOptions::Mode::Refresh;
+	lo.worker = &worker_;
 	int limit = opts.rateLimitSec >= 0 ? opts.rateLimitSec : kRefreshMinIntervalSec;
 	// The fail=refresh dev hook would never fire inside the first minute otherwise; an explicit ratelimit= wins.
 	if (opts.failRefresh && opts.rateLimitSec < 0) limit = 0;
@@ -167,6 +170,23 @@ bool App::refreshCatalog() {
 	if (!resetTo(std::move(screen), false)) return false;
 	loads.setPendingScreen(raw);
 	return true;
+}
+
+// Dev hook (autorefresh=): once Home alone has been up for autoRefreshMs, press Refresh for the user.
+void App::autoRefreshTick() {
+	const bool homeAlone = loads.installed() && stack.size() == 1 && stack.front().get() != loads.recordedScreen();
+	if (!homeAlone || pendingPush || pendingReset || pendingPop) {
+		homeSinceMs_ = 0;
+		return;
+	}
+	const uint32_t now = SDL_GetTicks();
+	if (!homeSinceMs_) homeSinceMs_ = now ? now : 1;
+	if (now - homeSinceMs_ < (uint32_t)opts.autoRefreshMs) return;
+	LOG("autorefresh: pressing Refresh (generation %u)", loads.generation());
+	// Either way, wait a full interval before the next press: a refused Refresh (a dialog is open, e.g. the
+	// "Couldn't refresh" notice nobody can click away in Dolphin) would otherwise retry, and log, every frame.
+	refreshCatalog();
+	homeSinceMs_ = 0;
 }
 
 void App::showDialog(Dialog d) {
@@ -262,6 +282,7 @@ void App::run() {
 		platform::poll(in, dt, gfx.width());
 		if (in.quit) break;
 		worker_.drainResults();
+		if (opts.autoRefreshMs >= 0) autoRefreshTick();
 #ifdef OPENSHOP_DEBUGTOOLS
 		debuglog::pump();
 #endif

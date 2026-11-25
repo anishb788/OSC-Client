@@ -27,7 +27,7 @@ public:
 		bool enterSubmits = ui.onTop() && ui.in.enterKey && !anyTopBarFocused(ui);
 		if (enterSubmits) ui.consumeConfirm();
 		if (ui.onTop()) {
-			for (char c : ui.in.text) if (query.size() < kMaxQuery && (unsigned char)c >= 0x20) append(std::string(1, c));
+			appendTyped(ui.in.text);
 			for (int i = 0; i < ui.in.backspaces; i++) erase();
 		}
 
@@ -44,7 +44,12 @@ public:
 		} else {
 			std::string shown = query;
 			int maxW = (int)field.w - 200;
-			while (ui.t.width(Font::Bold, 20, shown) > maxW && shown.size() > 1) shown.erase(0, 1);
+			// Trim from the left, one whole character at a time.
+			while (ui.t.width(Font::Bold, 20, shown) > maxW && shown.size() > 1) {
+				size_t cut = 1;
+				while (cut < shown.size() && ((unsigned char)shown[cut] & 0xC0) == 0x80) cut++;
+				shown.erase(0, cut);
+			}
 			int w = ui.t.draw(Font::Bold, 20, shown, tx, field.cy() - ui.t.lineHeight(Font::Bold, 20) / 2.0f, theme::text);
 			if (std::fmod(ui.time, 1.0) < 0.55) ui.g.fillRect({tx + w + 2, field.y + 12, 2, field.h - 24}, theme::accent);
 		}
@@ -111,11 +116,29 @@ private:
 		                   .radius = 10});
 	}
 
-	void append(const std::string& s) {
-		if (query.size() + s.size() > kMaxQuery) { audio::play(audio::Sfx::Error); return; }
-		if (s == " " && (query.empty() || query.back() == ' ')) return;
+	// Typed text arrives as UTF-8. It is appended one whole character at a time (never half of a multibyte sequence, so
+	// the 40-byte cap always falls on a character boundary), and control characters, DEL and damaged sequences are dropped.
+	void appendTyped(const std::string& text) {
+		for (size_t i = 0; i < text.size();) {
+			const unsigned char c = (unsigned char)text[i];
+			size_t n = c < 0x80 ? 1 : (c >> 5) == 6 ? 2 : (c >> 4) == 14 ? 3 : (c >> 3) == 30 ? 4 : 0;
+			bool ok = n > 0 && i + n <= text.size();
+			for (size_t k = 1; ok && k < n; k++) ok = ((unsigned char)text[i + k] & 0xC0) == 0x80;
+			if (!ok) { i++; continue; }
+			// Stop at the first character that doesn't fit: one Error sound per typing event, and a later, shorter
+			// character never slips in after a longer one was refused.
+			if (c >= 0x20 && c != 0x7F && !append(text.substr(i, n))) return;
+			i += n;
+		}
+	}
+
+	// Returns false (after the Error sound) when the query is full.
+	bool append(const std::string& s) {
+		if (query.size() + s.size() > kMaxQuery) { audio::play(audio::Sfx::Error); return false; }
+		if (s == " " && (query.empty() || query.back() == ' ')) return true;
 		query += s;
 		dirty = true;
+		return true;
 	}
 
 	void erase() {

@@ -9,6 +9,7 @@
 //   /slow/N/RATE      Content-Length body of N bytes dripped at about RATE bytes/s
 //   /headers          echoes the request head back as the body
 //   /reset            closes the connection with an RST as soon as it is accepted
+//   routes            addRoute() / addRawRoute() / addStallRoute() add per-instance paths (checked first), e.g. fixture files
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
@@ -17,6 +18,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -90,6 +92,22 @@ public:
 
 	int port() const { return port_; }
 	std::string url(const std::string& path) const { return "http://127.0.0.1:" + std::to_string(port_) + path; }
+	// A 200 JSON response (or `status` with an empty reason) for exactly `path`. Add routes before the first request.
+	void addRoute(const std::string& path, const std::string& body, int status = 200) {
+		std::string h = "HTTP/1.1 " + std::to_string(status) + (status == 200 ? " OK" : " Error") +
+		                "\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n";
+		addRawRoute(path, h + body);
+	}
+	// Sends exactly these bytes, then closes.
+	void addRawRoute(const std::string& path, const std::string& bytes) {
+		std::lock_guard<std::mutex> l(mu_);
+		routes_[path] = {bytes, false};
+	}
+	// A header promising 100000 bytes, three bytes, then silence until the client leaves.
+	void addStallRoute(const std::string& path) {
+		std::lock_guard<std::mutex> l(mu_);
+		routes_[path] = {"HTTP/1.1 200 OK\r\nContent-Length: 100000\r\n\r\nabc", true};
+	}
 	std::vector<std::string> requests() {
 		std::lock_guard<std::mutex> l(mu_);
 		return requests_;
@@ -147,8 +165,24 @@ private:
 		std::string path = head.substr(head.find(' ') + 1);
 		path = path.substr(0, path.find(' '));
 		unsigned long long a = 0, b = 0;
+		Route route;
+		bool routed = false;
+		{
+			std::lock_guard<std::mutex> l(mu_);
+			auto it = routes_.find(path);
+			if (it != routes_.end()) {
+				route = it->second;
+				routed = true;
+			}
+		}
 
-		if (path == "/reset") {
+		if (routed) {
+			sendAll(fd, route.bytes.data(), route.bytes.size());
+			while (route.stall && !stop_) {
+				pollfd p{fd, POLLIN, 0};
+				if (::poll(&p, 1, 20) > 0 && ::recv(fd, buf, sizeof buf, 0) <= 0) break;
+			}
+		} else if (path == "/reset") {
 			linger lg{1, 0};
 			setsockopt(fd, SOL_SOCKET, SO_LINGER, &lg, sizeof lg);
 		} else if (std::sscanf(path.c_str(), "/len/%llu", &a) == 1) {
@@ -200,6 +234,11 @@ private:
 		::close(fd);
 	}
 
+	struct Route {
+		std::string bytes;
+		bool stall = false;
+	};
+	std::map<std::string, Route> routes_;   // under mu_
 	int listenFd_ = -1;
 	int port_ = 0;
 	std::atomic<bool> stop_{false};

@@ -5,11 +5,11 @@
 //
 // Sources, highest priority first:
 //   1. Environment (PC build, set by `./dev`): OPENSHOP_START, OPENSHOP_MOCK, OPENSHOP_OFFLINE,
-//      OPENSHOP_REFRESH, OPENSHOP_FAIL, OPENSHOP_TOPBAR, OPENSHOP_MOCKDELAY, OPENSHOP_RATELIMIT, OPENSHOP_PERF, OPENSHOP_NETTEST, OPENSHOP_NETTESTBG, OPENSHOP_NETTESTQUIT. An empty variable is ignored. On/off flags
+//      OPENSHOP_REFRESH, OPENSHOP_FAIL, OPENSHOP_TOPBAR, OPENSHOP_MOCKDELAY, OPENSHOP_RATELIMIT, OPENSHOP_API, OPENSHOP_AUTOREFRESH, OPENSHOP_PERF, OPENSHOP_NETTEST, OPENSHOP_NETTESTBG, OPENSHOP_NETTESTQUIT. An empty variable is ignored. On/off flags
 //      (mock, offline, refresh) are on unless the value is "0", "false", "no" or "off"; fail, topbar, mockdelay
 //      and ratelimit take the values described next to their fields.
 //   2. <dataDir>/devstart (Wii, written by `./dev`; env vars don't reach Dolphin): one key=value
-//      per line with keys screen, mock, offline, refresh, fail, topbar, mockdelay, ratelimit, perf, nettest, nettestbg, nettestquit. A line without '=' is a bare screen name
+//      per line with keys screen, mock, offline, refresh, fail, topbar, mockdelay, ratelimit, api, autorefresh, perf, nettest, nettestbg, nettestquit. A line without '=' is a bare screen name
 //      (the old one-line format).
 struct DevOptions {
 	std::string screen; // "" = normal start
@@ -26,6 +26,14 @@ struct DevOptions {
 	// ratelimit=<seconds>: overrides the 60 s Refresh rate limit (0 = never limited). -1 = the built-in default (60,
 	// or 0 when fail=refresh is set, so that hook can fire straight after startup).
 	int rateLimitSec = -1;
+
+	// api=<base url>: replaces the OSC API base (http://hbb1.oscwii.org/api/v4) for the catalog fetch, e.g. a dead port
+	// to see the error screen or tools/http_test_server.py to see "bad data". Empty = the real server.
+	std::string apiBase;
+
+	// autorefresh=<ms>: whenever Home has been the only screen for this long, trigger a Refresh by itself (like the
+	// top-bar button). Lets the Refresh path be checked where nothing can click (Dolphin, CI). -1 = off.
+	int autoRefreshMs = -1;
 
 	// topbar=all previews every top-bar action button with fake progress and badge; any other value (or none)
 	// leaves the buttons to the features that own them.

@@ -1,4 +1,5 @@
 #include "gfx/Text.h"
+#include "gfx/Wrap.h"
 
 #include <cmath>
 
@@ -164,57 +165,9 @@ std::string Text::ellipsize(Font f, int size, std::string_view s, int maxW) {
 }
 
 std::vector<std::string> Text::wrap(Font f, int size, std::string_view s, int maxW, int maxLines) {
-	std::vector<std::string> lines;
-	// Defensive: '\r' has no glyph (renders as a box), so drop it. Catalog text is already sanitized.
-	std::string noCr;
-	if (s.find('\r') != std::string_view::npos) {
-		for (char c : s) if (c != '\r') noCr += c;
-		s = noCr;
-	}
-	auto push = [&](std::string line) {
-		lines.push_back(std::move(line));
-		return maxLines > 0 && (int)lines.size() >= maxLines;
-	};
-
-	size_t pos = 0;
-	while (pos <= s.size()) {
-		size_t nl = s.find('\n', pos);
-		std::string_view para = s.substr(pos, nl == std::string_view::npos ? std::string_view::npos : nl - pos);
-		pos = nl == std::string_view::npos ? s.size() + 1 : nl + 1;
-
-		std::string line;
-		size_t i = 0;
-		if (para.empty() && push("")) break;
-		while (i < para.size()) {
-			size_t sp = para.find(' ', i);
-			std::string_view word = para.substr(i, sp == std::string_view::npos ? std::string_view::npos : sp - i);
-			i = sp == std::string_view::npos ? para.size() : sp + 1;
-
-			std::string cand = line.empty() ? std::string(word) : line + " " + std::string(word);
-			if (width(f, size, cand) <= maxW) { line = std::move(cand); continue; }
-
-			if (!line.empty()) {
-				if (push(std::move(line))) goto done;
-				line.clear();
-			}
-			// A single word wider than the line: hard-break it.
-			std::string w(word);
-			while (width(f, size, w) > maxW && w.size() > 1) {
-				size_t cut = w.size();
-				while (cut > 1 && width(f, size, std::string_view(w).substr(0, cut)) > maxW) cut = prevChar(w, cut);
-				if (push(w.substr(0, cut))) goto done;
-				w.erase(0, cut);
-			}
-			line = std::move(w);
-		}
-		if (!line.empty() && push(std::move(line))) break;
-	}
-done:
-	if (maxLines > 0 && (int)lines.size() == maxLines && !lines.empty()) {
-		// Mark truncation if there was more text.
-		size_t used = 0;
-		for (auto& l : lines) used += l.size();
-		if (used + lines.size() < s.size()) lines.back() = ellipsize(f, size, lines.back() + " …", maxW);
-	}
+	textwrap::Wrapper w([&](std::string_view t) { return width(f, size, t); }, s, maxW, maxLines > 0 ? (size_t)maxLines : 0);
+	w.step();
+	std::vector<std::string> lines = w.lines();
+	if (w.truncated() && !lines.empty()) lines.back() = ellipsize(f, size, lines.back() + " …", maxW);
 	return lines;
 }

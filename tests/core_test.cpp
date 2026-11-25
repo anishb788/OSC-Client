@@ -33,6 +33,12 @@ static void testDevOptions() {
 	CHECK(!parse("fail=both\nfail=0\n").failRefresh); // last value wins, fully
 	CHECK(!parse("fail=refresh\nfail=startup\n").failRefresh);
 
+	// api=: the catalog API base, without trailing slashes; empty = the real server.
+	CHECK(parse("").apiBase.empty());
+	CHECK(parse("api=http://127.0.0.1:9/api/v4/\n").apiBase == "http://127.0.0.1:9/api/v4");
+	CHECK(parse("api=http://h/x?a=b\n").apiBase == "http://h/x?a=b");
+	CHECK(parse("api=http://h/v4\n").describe().find(" api=http://h/v4") != std::string::npos);
+	CHECK(parse("").autoRefreshMs == -1 && parse("autorefresh=4000\n").autoRefreshMs == 4000 && parse("autorefresh=x\n").autoRefreshMs == -1);
 	// mockdelay= / ratelimit=: non-negative integers; anything else keeps the built-in default (-1).
 	CHECK(parse("").mockDelayMs == -1 && parse("").rateLimitSec == -1);
 	CHECK(parse("mockdelay=4000\n").mockDelayMs == 4000);

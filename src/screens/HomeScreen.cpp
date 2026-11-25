@@ -63,7 +63,10 @@ public:
 		// Right: category tiles (2 x 3).
 		struct Tile { std::string name, label; };
 		std::vector<Tile> tiles;
-		for (auto& c : app.catalog.categories) tiles.push_back({c.name, c.display});
+		// The grid has six slots: the first five categories, then "All apps", whatever number the API returns (the rest
+		// are reachable through All apps).
+		for (size_t i = 0; i < app.catalog.categories.size() && i < 5; i++)
+			tiles.push_back({app.catalog.categories[i].name, app.catalog.categories[i].display});
 		tiles.push_back({"", "All apps"});
 		for (size_t i = 0; i < tiles.size() && i < 6; i++) {
 			Rect r{L.grid.x + (i % 2) * (L.tileW + homelayout::kTileGap),

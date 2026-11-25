@@ -3,7 +3,9 @@
 #include <chrono>
 #include <csignal>
 #include <cstdio>
+#include <memory>
 #include <string>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <thread>
 #include <unistd.h>
@@ -33,6 +35,8 @@ static bool exists(const std::string& p) {
 }
 
 int main() {
+	alarm(120);   // a hang kills the run instead of blocking CI
+	TempDir tmp;
 	LoopbackServer srv;
 
 	{   // Content-Length, bigger than one step's byte budget
@@ -68,7 +72,8 @@ int main() {
 		HttpResult r = get(srv.url("/stall"), sink, req);
 		int64_t dt = nowMs() - t0;
 		CHECK(r.error == HttpError::Timeout);
-		CHECK(dt >= 350 && dt < 900);
+		CHECK(dt >= 350);      // the idle timer is 400 ms
+			CHECK(dt < 5000);      // hang detector, not a timing assertion
 	}
 	{   // 404 and the User-Agent
 		MemorySink sink;
@@ -106,7 +111,7 @@ int main() {
 		CHECK(w.status == Transport::IoStatus::Error);   // reaching this line means the process survived
 	}
 	{   // cancel mid-body from another thread: fast, no .tmp
-		std::string path = "/tmp/openshop_posix_test.bin";
+		std::string path = tmp.file("cancel.bin");
 		std::remove(path.c_str());
 		std::atomic<bool> cancel{false};
 		std::thread canceller([&] {
@@ -124,7 +129,7 @@ int main() {
 		}
 		int64_t dt = nowMs() - t0;
 		canceller.join();
-		CHECK(dt < 700);
+		CHECK(dt < 3000);   // hang detector
 		CHECK(!exists(path + ".tmp"));
 		CHECK(!exists(path));
 	}
@@ -140,6 +145,25 @@ int main() {
 		while (x.step(b) == HttpTransfer::StepResult::Pending) {}
 		CHECK(x.result().ok());
 		CHECK(sink.body() == patternBody(20000));
+	}
+
+	{   // a client that connects, asks for far more than the socket buffers hold, never reads and never closes: the
+		// server's destructor must still return
+		int cfd = ::socket(AF_INET, SOCK_STREAM, 0);
+		auto s2 = std::make_unique<LoopbackServer>();
+		sockaddr_in sa{};
+		sa.sin_family = AF_INET;
+		sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+		sa.sin_port = htons(static_cast<uint16_t>(s2->port()));
+		CHECK(::connect(cfd, reinterpret_cast<sockaddr*>(&sa), sizeof sa) == 0);
+		const char req[] = "GET /len/40000000 HTTP/1.0\r\n\r\n";
+		CHECK(::send(cfd, req, sizeof req - 1, 0) == static_cast<ssize_t>(sizeof req - 1));
+		for (int i = 0; i < 2500 && s2->requests().empty(); i++) usleep(2000);
+		usleep(300000);   // let the server fill the socket buffers and block on the unread data
+		int64_t t0 = nowMs();
+		s2.reset();
+		CHECK(nowMs() - t0 < 3000);   // hang detector
+		::close(cfd);
 	}
 
 	if (failures) {

@@ -1,6 +1,7 @@
 #include "net/Worker.h"
 
 #include <algorithm>
+#include <exception>
 
 #include <SDL_mutex.h>
 #include <SDL_thread.h>
@@ -81,12 +82,12 @@ struct Worker::Entry {
 	JobProgress progress;
 	bool active = false;        // under the Worker lock
 	uint32_t lastRun = 0;       // SDL ticks; under the Worker lock
-	int stopSteps = 0;          // worker thread only
+	int cancelSteps = 0;        // steps taken since the cancel flag was seen; worker thread only
 	std::unique_ptr<Transport> transport;   // worker thread only
 	std::unique_ptr<Job> job;
 };
 
-Worker::Worker(TransportFactory factory) : factory_(std::move(factory)) {
+Worker::Worker(TransportFactory factory, bool lowPriority) : factory_(std::move(factory)), lowPriority_(lowPriority) {
 	mutex_ = SDL_CreateMutex();
 	cond_ = SDL_CreateCond();
 }
@@ -138,7 +139,7 @@ JobId Worker::submit(JobClass cls, std::string tag, std::unique_ptr<Job> job) {
 	e->job = std::move(job);
 	{
 		Lock l(mutex_);
-		if (stopping_) return 0;
+		if (stopping_ || !thread_) return 0;
 		e->id = nextId_++;
 		e->seq = nextSeq_++;
 		entries_.push_back(e);
@@ -182,7 +183,8 @@ bool Worker::progress(JobId id, uint64_t& received, int64_t& total) const {
 	for (const auto& e : entries_) {
 		if (e->id == id) {
 			received = e->progress.received.load(std::memory_order_relaxed);
-			total = e->progress.total.load(std::memory_order_relaxed);
+			uint32_t t = e->progress.total.load(std::memory_order_relaxed);
+			total = t == JobProgress::kUnknown ? -1 : static_cast<int64_t>(t);
 			return true;
 		}
 	}
@@ -205,15 +207,25 @@ size_t Worker::drainResults() {
 		Lock l(mutex_);
 		batch.swap(results_);
 	}
-	for (auto& fn : batch) fn();
+	// Exceptions are enabled in both builds (no -fno-exceptions), so one bad closure must not drop the rest.
+	for (auto& fn : batch) {
+		try {
+			fn();
+		} catch (const std::exception& ex) {
+			LOG("net worker: a result closure threw: %s", ex.what());
+		} catch (...) {
+			LOG("net worker: a result closure threw");
+		}
+	}
 	return batch.size();
 }
 
 int Worker::threadMain(void* self) {
 	// Below the render thread so a busy network never costs frames. On the Wii port this maps to an LWP priority; see
 	// the note in Increment 6 of increments.md for what was and wasn't verified.
-	SDL_SetThreadPriority(SDL_THREAD_PRIORITY_LOW);
-	static_cast<Worker*>(self)->loop();
+	Worker* w = static_cast<Worker*>(self);
+	if (w->lowPriority_) SDL_SetThreadPriority(SDL_THREAD_PRIORITY_LOW);
+	w->loop();
 	return 0;
 }
 
@@ -274,6 +286,7 @@ std::shared_ptr<Worker::Entry> Worker::pickLocked() {
 }
 
 void Worker::loop() {
+	int fastStreak = 0;   // consecutive Pending steps that took under 1 ms
 	for (;;) {
 		std::shared_ptr<Entry> e;
 		bool stopping = false;
@@ -289,8 +302,11 @@ void Worker::loop() {
 		}
 
 		bool done = false;
-		if (stopping && ++e->stopSteps > kStopSteps) {
-			LOG("net worker: job %llu (%s) ignored the stop, dropping it", static_cast<unsigned long long>(e->id), e->tag.c_str());
+		bool fastPending = false;
+		// A job that keeps returning Pending after its cancel flag is up must not hold the thread, or it would starve
+		// every other job: after kStopSteps such steps it is destroyed as it stands.
+		if ((stopping || e->cancel.load(std::memory_order_relaxed)) && ++e->cancelSteps > kStopSteps) {
+			LOG("net worker: job %llu (%s) ignored the cancel, dropping it", static_cast<unsigned long long>(e->id), e->tag.c_str());
 			done = true;
 		} else {
 			if (!e->transport) {
@@ -298,16 +314,32 @@ void Worker::loop() {
 				if (!e->transport) e->transport = std::make_unique<NoNetworkTransport>();
 			}
 			JobContext ctx(*this, e->id, *e->transport, hosts_, &e->cancel, e->progress, StepBudget());
+			uint32_t t0 = SDL_GetTicks();
 			done = e->job->step(ctx) == JobStep::Done;
+			fastPending = !done && SDL_GetTicks() - t0 < 1;
 		}
 
+		bool pause = false;
 		{
 			Lock l(mutex_);
 			e->lastRun = SDL_GetTicks();
 			if (done) entries_.erase(std::find(entries_.begin(), entries_.end(), e));
+			if (fastPending) {
+				// Sleep only once every active job has just answered "still pending" instantly, i.e. nothing is
+				// waiting for a turn that would do real work.
+				int active = 0;
+				for (auto& o : entries_) active += o->active;
+				if (++fastStreak >= std::max(1, active)) {
+					pause = true;
+					fastStreak = 0;
+				}
+			} else {
+				fastStreak = 0;
+			}
 		}
 		// A finished job is destroyed here, outside the lock, on the worker thread.
 		if (done) e.reset();
+		if (pause) SDL_Delay(1);
 	}
 }
 

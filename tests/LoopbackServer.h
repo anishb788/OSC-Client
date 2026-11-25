@@ -9,11 +9,14 @@
 //   /slow/N/RATE      Content-Length body of N bytes dripped at about RATE bytes/s
 //   /headers          echoes the request head back as the body
 //   /reset            closes the connection with an RST as soon as it is accepted
+#include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -33,6 +36,30 @@ inline std::string patternBody(uint64_t n) {
 	for (uint64_t i = 0; i < n; i++) s[i] = static_cast<char>(patternByte(i));
 	return s;
 }
+
+// A private scratch directory per process (mkdtemp), removed with everything in it on destruction, so concurrent test
+// runs never share file names.
+class TempDir {
+public:
+	TempDir() {
+		char tmpl[] = "/tmp/openshop_test_XXXXXX";
+		if (!::mkdtemp(tmpl)) {
+			std::fprintf(stderr, "TempDir: mkdtemp failed\n");
+			std::abort();
+		}
+		path_ = tmpl;
+	}
+	~TempDir() {
+		std::error_code ec;
+		std::filesystem::remove_all(path_, ec);
+	}
+	TempDir(const TempDir&) = delete;
+	TempDir& operator=(const TempDir&) = delete;
+	std::string file(const std::string& name) const { return path_ + "/" + name; }
+
+private:
+	std::string path_;
+};
 
 class LoopbackServer {
 public:
@@ -80,9 +107,20 @@ private:
 	}
 
 	bool sendAll(int fd, const char* d, size_t n) {
+		// Never blocks in send(): a client that stopped reading must not keep the destructor's joins waiting.
 		while (n > 0 && !stop_) {
-			ssize_t w = ::send(fd, d, n, MSG_NOSIGNAL);
-			if (w < 0) return false;
+			pollfd p{fd, POLLOUT, 0};
+			int r = ::poll(&p, 1, 20);
+			if (r < 0) {
+				if (errno == EINTR) continue;
+				return false;
+			}
+			if (r == 0) continue;
+			ssize_t w = ::send(fd, d, n, MSG_NOSIGNAL | MSG_DONTWAIT);
+			if (w < 0) {
+				if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) continue;
+				return false;
+			}
 			d += w;
 			n -= static_cast<size_t>(w);
 		}

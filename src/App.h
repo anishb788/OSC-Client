@@ -78,7 +78,8 @@ public:
 	DevOptions opts; // parsed once in init()
 
 	// The one network worker (started in init(), stopped first thing in shutdown()). Nothing submits to it yet. Its
-	// rules, including "jobs never hold catalog pointers", are in net/Worker.h.
+	// rules, including "jobs never hold catalog pointers", are in net/Worker.h. If start() failed, running() is false
+	// and submit() returns 0: callers must show an error instead of waiting on a job that will never run.
 	net::Worker& worker() { return worker_; }
 
 	bool init(int argc, char** argv);

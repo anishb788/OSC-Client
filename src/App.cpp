@@ -43,7 +43,8 @@ bool App::init(int argc, char** argv) {
 	writeLastRunProbe();
 
 	opts = DevOptions::load(platform::dataDir());
-	if (!worker_.start()) LOG("net worker failed to start; network jobs will not run");
+	// The app stays usable without it, but submit() then returns 0 and nothing network-related can run.
+	if (!worker_.start()) LOG("ERROR: the net worker failed to start; every network job will be rejected (worker().running() is false)");
 	LOG("OpenShop %s, User-Agent: %s", OPENSHOP_VERSION, userAgent());
 	LOG("Dev options: %s", opts.describe().c_str());
 	LOG("jansson %s", JANSSON_VERSION);

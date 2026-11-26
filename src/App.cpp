@@ -54,6 +54,10 @@ bool App::init(int argc, char** argv) {
 	}
 	LOG("OpenShop %s, User-Agent: %s", OPENSHOP_VERSION, userAgent());
 	LOG("Dev options: %s", opts.describe().c_str());
+	// A release must not behave differently because of a stray devstart file or environment variable, so say so loudly.
+	// (Compile-time gating of these hooks is a later item; this is only the warning.)
+	if (const std::string active = opts.active(); !active.empty())
+		LOG("WARNING: DEV OPTIONS ACTIVE, this is not a normal launch: %s", active.c_str());
 	// Only the failure is logged: a normal launch writes nothing to the SD card but the catalog and icon caches.
 	if (!(IMG_Init(IMG_INIT_PNG) & IMG_INIT_PNG)) LOG("SDL2_image: IMG_Init(PNG) failed: %s", IMG_GetError());
 
@@ -90,6 +94,9 @@ void App::shutdown() {
 	// First, while the SDL timer and threads still exist: cancels and joins any in-flight transfer.
 	uint32_t stopT0 = SDL_GetTicks();
 	worker_.stop();
+	// Results the main thread never got to drain: their captures are destroyed now, while SDL is still up, not in ~Worker
+	// after SDL_Quit().
+	worker_.discardResults();
 	if (netTest_) NTLOG("[nettest] net worker stopped in %u ms", SDL_GetTicks() - stopT0);
 	// Before SDL goes away; skips net_deinit (and says why) when init or a DNS lookup is still live in IOS. No-op on PC.
 	const char* netDown = net::shutdown();

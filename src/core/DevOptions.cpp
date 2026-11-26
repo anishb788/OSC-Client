@@ -115,3 +115,24 @@ std::string DevOptions::describe() const {
 	       (autoRefreshMs < 0 ? std::string() : " autorefresh=" + std::to_string(autoRefreshMs)) +
 	       (nettest.empty() && nettestBg.empty() ? std::string() : " nettest=" + nettest + " nettestbg=" + nettestBg + " nettestquit=" + (nettestQuit ? "1" : "0"));
 }
+
+std::string DevOptions::active() const {
+	std::string out;
+	auto add = [&out](const std::string& s) { out += (out.empty() ? "" : " ") + s; };
+	// "home" is the normal start, so it does not count.
+	if (!screen.empty() && screen != "home") add("screen=" + screen);
+	if (mock) add("mock=1");
+	if (offline) add("offline=1");
+	if (refresh) add("refresh=1");
+	if (failStartup || failRefresh) add(std::string("fail=") + (failStartup && failRefresh ? "both" : failStartup ? "startup" : "refresh"));
+	if (topbarAll) add("topbar=all");
+	if (mockDelayMs >= 0) add("mockdelay=" + std::to_string(mockDelayMs));
+	if (rateLimitSec >= 0) add("ratelimit=" + std::to_string(rateLimitSec));
+	if (cacheTtlSec >= 0) add("cachettl=" + std::to_string(cacheTtlSec));
+	if (!apiBase.empty()) add("api=" + apiBase);
+	if (!iconBase.empty()) add("icons=" + iconBase);
+	if (autoRefreshMs >= 0) add("autorefresh=" + std::to_string(autoRefreshMs));
+	if (perf) add("perf=1");
+	if (!nettest.empty() || !nettestBg.empty() || nettestQuit) add("nettest=" + nettest + " nettestbg=" + nettestBg);
+	return out;
+}

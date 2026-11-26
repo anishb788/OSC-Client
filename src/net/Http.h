@@ -34,7 +34,7 @@ enum class HttpError {
 	Connect,      // TCP connect refused / failed
 	Timeout,      // connect, idle or total timer expired
 	HttpStatus,   // server answered with a non-2xx status (HttpResult::status has it)
-	TlsRequired,  // https:// URL (or redirect to one); HTTPS is Milestone 4
+	TlsRequired,  // https:// URL (or redirect to one); OpenShop uses plain HTTP only (project decision)
 	TooLarge,     // body exceeds HttpRequest::maxBody
 	Parse,        // malformed URL or malformed response
 	Io,           // socket error, early close, or the sink refused data (e.g. SD card write failed)

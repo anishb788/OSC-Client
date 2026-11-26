@@ -13,7 +13,7 @@ std::string describe(const HttpResult& r) {
 	case HttpError::HttpStatus:
 		return r.status > 0 ? "The server returned an error (HTTP " + std::to_string(r.status) + ")."
 		                    : "The server returned an error.";
-	case HttpError::TlsRequired: return "The server needs a secure (HTTPS) connection, which isn't supported yet.";
+	case HttpError::TlsRequired: return "The server asked for an HTTPS connection, which OpenShop doesn't use (it talks to the shop over plain HTTP).";
 	case HttpError::TooLarge: return "The server's response was too large.";
 	case HttpError::Parse: return "The server sent a response that couldn't be understood.";
 	case HttpError::Io: return "The connection was interrupted or the data couldn't be saved.";

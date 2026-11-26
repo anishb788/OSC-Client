@@ -12,6 +12,7 @@
 
 #include "catalog/OscApi.h"
 #include "core/Log.h"
+#include "core/Time.h"
 
 namespace catcache {
 
@@ -174,9 +175,7 @@ std::string buildManifest(const Meta& m) {
 
 int plainRemove(const char* p) { return std::remove(p); }
 
-double msSince(std::chrono::steady_clock::time_point t) {
-	return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t).count();
-}
+using timeutil::msSince;
 
 // What kind of file of ours `name` is, if any: the manifest itself, a body "<base>.<G>.json" (G in `gen`), or a leftover
 // (a .tmp, the manifest's .bak, a body of the pre-generation layout such as "contents.json"). Anything else is not ours
@@ -284,90 +283,153 @@ Cache::Status Cache::readBodies(const Meta& meta, Bodies& out) const {
 	return Status::Ok;
 }
 
-bool Cache::write(const Bodies& bodies, std::string_view baseUrl, std::string_view appVersion, int64_t fetchedAt,
-                  uint32_t* generationOut) {
-	if (!bodies.contents || bodies.contents->empty()) return false;
+Cache::Writer::Writer(const Cache& cache, Bodies&& bodies, std::string_view baseUrl, std::string_view appVersion,
+                      int64_t fetchedAt)
+    : cache_(cache), bodies_(std::move(bodies)), baseUrl_(baseUrl), appVersion_(appVersion), fetchedAt_(fetchedAt) {}
+
+// Bodies in write order, with where their size and hash go in the manifest.
+namespace {
+struct BodyRef {
+	const char* base;
+	std::optional<std::string> Bodies::*body;
+	FileInfo Meta::*info;
+};
+const BodyRef kBodyRefs[] = {
+	{kInfoBase, &Bodies::information, &Meta::information},
+	{kContentsBase, &Bodies::contents, &Meta::contents},
+	{kFeaturedBase, &Bodies::featured, &Meta::featured},
+};
+} // namespace
+
+bool Cache::Writer::step() {
+	if (stage_ == Stage::Finished) return true;
 	const auto t0 = std::chrono::steady_clock::now();
-	if (!makeDirs(dir_)) {
-		LOG("Catalog cache: cannot create %s, running uncached", dir_.c_str());
+	switch (stage_) {
+	case Stage::Prepare:
+		if (!prepare()) fail();
+		else stage_ = Stage::Bodies;
+		break;
+	case Stage::Bodies:
+		if (!writeNextBody()) fail();
+		break;
+	case Stage::Commit:
+		if (!commit()) fail();
+		else stage_ = Stage::Cleanup;
+		break;
+	case Stage::Cleanup:
+		// Only now are the older generations expendable. A failure here just leaves harmless files behind, which the next
+		// successful write removes.
+		cache_.cleanup(&gen_);
+		ok_ = true;
+		stage_ = Stage::Finished;
+		break;
+	case Stage::Finished: break;
+	}
+	busyMs_ += msSince(t0);
+	if (stage_ == Stage::Finished && ok_)
+		LOG("Catalog cache: wrote %zu KB in %.0f ms of work (generation %u)", (total_ + 512) / 1024, busyMs_, (unsigned)gen_);
+	return stage_ == Stage::Finished;
+}
+
+bool Cache::Writer::prepare() {
+	if (!bodies_.contents || bodies_.contents->empty()) return false;
+	if (!makeDirs(cache_.dir_)) {
+		LOG("Catalog cache: cannot create %s, running uncached", cache_.dir_.c_str());
 		return false;
 	}
 	// The new generation is past everything that is there, so no name it writes exists yet (see the header).
 	uint32_t highest = 0;
-	{
-		std::vector<std::string> names;
-		listDir(dir_, names);
-		for (const std::string& n : names) {
-			uint32_t g;
-			if (classify(n, g) != Kind::Foreign && g > highest) highest = g;
-		}
-		for (const char* suffix : {"", ".bak"}) {
-			std::string text;
-			Meta old;
-			if (readRaw(path(kManifest, suffix), text, kMaxManifestBytes) == ReadStatus::Ok && parseManifest(text, old) &&
-			    old.generation > highest)
-				highest = old.generation;
-		}
+	std::vector<std::string> names;
+	listDir(cache_.dir_, names);
+	for (const std::string& n : names) {
+		uint32_t g;
+		if (classify(n, g) != Kind::Foreign && g > highest) highest = g;
+	}
+	for (const char* suffix : {"", ".bak"}) {
+		std::string text;
+		Meta old;
+		if (cache_.readRaw(cache_.path(kManifest, suffix), text, kMaxManifestBytes) == ReadStatus::Ok && parseManifest(text, old) &&
+		    old.generation > highest)
+			highest = old.generation;
 	}
 	if (highest == 0xFFFFFFFFu) {
 		LOG("Catalog cache: the generation counter is exhausted, running uncached");
 		return false;
 	}
-	const uint32_t gen = highest + 1;
-	Meta m;
-	m.format = kFormat;
-	m.appVersion = std::string(appVersion);
-	m.baseUrl = std::string(baseUrl);
-	m.fetchedAt = fetchedAt > 0 ? fetchedAt : 0;
-	m.generation = gen;
-	struct Item {
-		const char* base;
-		const std::optional<std::string>* body;
-		FileInfo* info;
-	};
-	const Item items[] = {
-		{kInfoBase, &bodies.information, &m.information},
-		{kContentsBase, &bodies.contents, &m.contents},
-		{kFeaturedBase, &bodies.featured, &m.featured},
-	};
-	// A failed attempt removes what it wrote (on a nearly full card the leftovers would make the next attempt worse). Only
-	// files of generation `gen`, which no manifest names yet.
-	auto abandon = [&] {
-		for (const Item& it : items) {
-			removeFile(path(bodyName(it.base, gen)));
-			removeFile(path(bodyName(it.base, gen), ".tmp"));
-		}
-		removeFile(path(kManifest, ".tmp"));
-	};
-	size_t total = 0;
-	for (const Item& it : items) {
-		// An empty optional body is as good as absent (the manifest cannot describe a size-0 file).
-		if (!*it.body || (*it.body)->empty()) continue;
-		const std::string& b = **it.body;
-		if (!writeFileAtomic(path(bodyName(it.base, gen)), b, ops_)) {
-			LOG("Catalog cache: writing %s failed, running uncached", bodyName(it.base, gen).c_str());
-			abandon();
+	gen_ = highest + 1;
+	meta_.format = kFormat;
+	meta_.appVersion = appVersion_;
+	meta_.baseUrl = baseUrl_;
+	meta_.fetchedAt = fetchedAt_ > 0 ? fetchedAt_ : 0;
+	meta_.generation = gen_;
+	return true;
+}
+
+bool Cache::Writer::writeNextBody() {
+	constexpr int kCount = sizeof(kBodyRefs) / sizeof(kBodyRefs[0]);
+	// An empty optional body is as good as absent (the manifest cannot describe a size-0 file); skip to the next real one.
+	while (nextBody_ < kCount) {
+		const BodyRef& r = kBodyRefs[nextBody_++];
+		const std::optional<std::string>& body = bodies_.*r.body;
+		if (!body || body->empty()) continue;
+		if (!writeFileAtomic(cache_.path(bodyName(r.base, gen_)), *body, cache_.ops_)) {
+			LOG("Catalog cache: writing %s failed, running uncached", bodyName(r.base, gen_).c_str());
 			return false;
 		}
-		it.info->present = true;
-		it.info->size = b.size();
-		it.info->hash = fnv1a64(b);
-		total += b.size();
+		FileInfo& fi = meta_.*r.info;
+		fi.present = true;
+		fi.size = body->size();
+		fi.hash = fnv1a64(*body);
+		total_ += body->size();
+		break;
 	}
+	if (nextBody_ >= kCount) stage_ = Stage::Commit;
+	return true;
+}
+
+bool Cache::Writer::commit() {
 	// The commit point. libfat cannot rename over cache.json, so commitFile parks the old one as cache.json.bak first;
 	// the reader knows that fallback. A manifest that is not in place leaves the old generation fully readable.
-	const std::string manifest = buildManifest(m);
-	if (manifest.empty() || !writeFileAtomic(path(kManifest), manifest, ops_)) {
+	const std::string manifest = buildManifest(meta_);
+	if (manifest.empty() || !writeFileAtomic(cache_.path(kManifest), manifest, cache_.ops_)) {
 		LOG("Catalog cache: writing the manifest failed, running uncached");
-		abandon();
 		return false;
 	}
-	// Only now are the older generations expendable. A failure here just leaves harmless files behind, which the next
-	// successful write removes.
-	cleanup(&gen);
-	if (generationOut) *generationOut = gen;
-	LOG("Catalog cache: wrote %zu KB in %.0f ms (generation %u)", (total + 512) / 1024, msSince(t0), (unsigned)gen);
+	committed_ = true;
 	return true;
+}
+
+// A failed attempt removes what it wrote (on a nearly full card the leftovers would make the next attempt worse). Only
+// files of generation `gen_`, which no manifest names yet.
+void Cache::Writer::fail() {
+	if (gen_ != 0) {
+		for (const BodyRef& r : kBodyRefs) {
+			cache_.removeFile(cache_.path(bodyName(r.base, gen_)));
+			cache_.removeFile(cache_.path(bodyName(r.base, gen_), ".tmp"));
+		}
+		cache_.removeFile(cache_.path(kManifest, ".tmp"));
+	}
+	ok_ = false;
+	stage_ = Stage::Finished;
+}
+
+void Cache::Writer::abandon() {
+	if (stage_ == Stage::Finished) return;
+	if (committed_) {
+		// The new cache is in place; only the tidying of old generations is skipped.
+		ok_ = true;
+		stage_ = Stage::Finished;
+		return;
+	}
+	fail();
+}
+
+bool Cache::write(const Bodies& bodies, std::string_view baseUrl, std::string_view appVersion, int64_t fetchedAt,
+                  uint32_t* generationOut) {
+	Writer w(*this, Bodies(bodies), baseUrl, appVersion, fetchedAt);
+	while (!w.step()) {}
+	if (w.ok() && generationOut) *generationOut = w.generation();
+	return w.ok();
 }
 
 void Cache::cleanup(const uint32_t* keepGeneration) const {

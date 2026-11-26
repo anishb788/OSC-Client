@@ -5,12 +5,10 @@
 #include <cstdio>
 #include <ctime>
 
+#include "core/Strings.h"
+
 namespace {
-std::string lower(std::string_view s) {
-	std::string out(s);
-	for (char& c : out) c = (char)std::tolower((unsigned char)c);
-	return out;
-}
+using strutil::lowerAscii;
 
 std::vector<std::string> words(std::string_view q) {
 	std::vector<std::string> out;
@@ -85,7 +83,7 @@ bool isReservedDeviceName(std::string_view name) {
 	size_t dot = name.find('.');
 	if (dot != std::string_view::npos) name = name.substr(0, dot);
 	while (!name.empty() && name.back() == ' ') name.remove_suffix(1);
-	std::string l = lower(std::string(name));
+	std::string l = lowerAscii(std::string(name));
 	if (l == "con" || l == "prn" || l == "aux" || l == "nul") return true;
 	return l.size() == 4 && (l.compare(0, 3, "com") == 0 || l.compare(0, 3, "lpt") == 0) && l[3] >= '1' && l[3] <= '9';
 }
@@ -126,10 +124,10 @@ void Catalog::finalize() {
 		many(a.authors); many(a.contributors);
 		one(a.iconUrl); one(a.archiveUrl); one(a.archiveMd5); one(a.binaryUrl); one(a.binaryMd5); one(a.metaUrl);
 		many(a.peripherals); many(a.platforms); many(a.flags); many(a.subdirectories);
-		a.nameL = lower(a.name);
-		a.slugL = lower(a.slug);
-		a.authorL = lower(a.author);
-		a.descL = lower(a.shortDesc) + " " + lower(a.longDesc);
+		a.nameL = lowerAscii(a.name);
+		a.slugL = lowerAscii(a.slug);
+		a.authorL = lowerAscii(a.author);
+		a.descL = lowerAscii(a.shortDesc) + " " + lowerAscii(a.longDesc);
 	}
 	one(featuredSlug);
 

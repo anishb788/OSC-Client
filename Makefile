@@ -42,7 +42,8 @@ WARN	+=	-Werror
 endif
 
 # DEBUGTOOLS=1 (e.g. `./dev build DEBUGTOOLS=1`) builds the hardware test build: on-screen network test bench and
-# debuglog.txt (see src/core/DebugLog.h). Run `make clean` when switching, since objects don't track this flag.
+# debuglog.txt (see src/core/DebugLog.h). Objects are tracked against the flags through build/.flags (see below), so
+# switching DEBUGTOOLS or WERROR rebuilds by itself.
 DEFS	:=
 ifeq ($(DEBUGTOOLS),1)
 DEFS	+=	-DOPENSHOP_DEBUGTOOLS
@@ -139,6 +140,7 @@ run:
 else
 
 DEPENDS	:=	$(OFILES:.o=.d)
+FLAGS_STAMP	:=	.flags
 
 #---------------------------------------------------------------------------------
 # main targets
@@ -146,7 +148,7 @@ DEPENDS	:=	$(OFILES:.o=.d)
 $(OUTPUT).dol: $(OUTPUT).elf
 $(OUTPUT).elf: $(OFILES)
 
-$(OFILES_SOURCES) : $(HFILES)
+$(OFILES_SOURCES) : $(HFILES) $(FLAGS_STAMP)
 
 # .incbin'd assets are not seen by the compiler's dependency tracking.
 assets.o : $(wildcard $(ROOTDIR)/assets/fonts/*.ttf)
@@ -160,6 +162,22 @@ assets.o : $(wildcard $(ROOTDIR)/assets/fonts/*.ttf)
 	$(bin2o)
 
 -include $(DEPENDS)
+
+# The compiler flags this build was made with. The stamp is rewritten only when they differ from the last build, so
+# every source object depending on it recompiles exactly when DEBUGTOOLS / WERROR (or any other flag) changed, and
+# not otherwise. Chosen over "./dev build cleans on change" because it lives in make itself: plain `make`, ./dev,
+# and any other caller all get the same answer, and nothing is rebuilt that did not need to be.
+# (FLAGS_STAMP is set at the top of this section: prerequisites expand immediately.)
+.PHONY: FORCE
+FORCE:
+# (A dry run, make -n, skips the comparison: a FORCE'd stamp would otherwise make every object look out of date.)
+ifneq ($(findstring n,$(firstword -$(MAKEFLAGS))),)
+STAMPDEP :=
+else
+STAMPDEP := FORCE
+endif
+$(FLAGS_STAMP): $(STAMPDEP)
+	@printf '%s\n' '$(DEFS) | $(WARN) | $(MACHDEP)' | cmp -s - $@ || printf '%s\n' '$(DEFS) | $(WARN) | $(MACHDEP)' > $@
 
 #---------------------------------------------------------------------------------
 endif

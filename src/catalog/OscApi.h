@@ -16,7 +16,7 @@
 
 namespace oscapi {
 
-// The one place that knows the server. Switching to HTTPS later means changing kBaseUrl and kContentsUrl.
+// The one place that knows the server (plain HTTP: the OSC host serves the API, icons and archives over http).
 inline constexpr const char* kBaseUrl = "http://hbb1.oscwii.org/api/v4";
 inline constexpr const char* kContentsUrl = "http://hbb1.oscwii.org/api/contents";
 inline constexpr const char* kInformationPath = "/information";

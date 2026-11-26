@@ -4,11 +4,13 @@
 #include <atomic>
 #include <chrono>
 #include <ctime>
+#include <map>
 #include <optional>
 
 #include "catalog/CatalogCache.h"
 #include "catalog/OscApi.h"
 #include "core/Log.h"
+#include "core/Time.h"
 #include "core/Version.h"
 #include "net/Worker.h"
 
@@ -30,9 +32,81 @@ struct LoadState {
 	Catalog catalog;
 };
 
-double msSince(std::chrono::steady_clock::time_point t) {
-	return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t).count();
+using timeutil::msSince;
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The cache write (M4). It is a separate Background job submitted after the catalog was delivered, and it runs in slices
+// (one body, the manifest, the cleanup each get a step), so Catalog > IconLocal > Icon jobs run between the slices instead
+// of waiting out a 1.7 MB SD write.
+//
+// The rules from Increment 10 still hold:
+//  - Delivery comes first: the write job does not exist until the catalog has been handed over.
+//  - One writer at a time, and no read during a write: the next loader's plan() calls finishPendingWrite() before it reads,
+//    which runs the rest of an unfinished write to its end right there (on the worker thread, which is also where every
+//    slice runs, so nothing can interleave with it). Because only a loader that has already finished submits a write, and
+//    Catalog jobs run one at a time, there is never more than one write per directory, though Background allows 2 jobs.
+//  - A cancelled or stopped write (App exit, Worker::stop()) calls Writer::abandon(): before the manifest commit it
+//    removes its own generation's files and the old cache is untouched; after it, only the cleanup is skipped.
+//
+// The registry maps a cache directory to its unfinished writer. It is touched only on the worker thread, except that two
+// Workers in one process (the host tests) could do it at the same time, hence the tiny spin lock (std::atomic only, as
+// elsewhere: no std::mutex on the Wii).
+using WriterPtr = std::shared_ptr<catcache::Cache::Writer>;
+std::atomic_flag g_registryLock; // clear since C++20
+std::map<std::string, WriterPtr>& registry() {
+	static std::map<std::string, WriterPtr> r;
+	return r;
 }
+struct RegistryLock {
+	RegistryLock() { while (g_registryLock.test_and_set(std::memory_order_acquire)) {} }
+	~RegistryLock() { g_registryLock.clear(std::memory_order_release); }
+};
+
+void forgetWrite(const std::string& dir, const WriterPtr& w) {
+	RegistryLock l;
+	auto it = registry().find(dir);
+	if (it != registry().end() && it->second == w) registry().erase(it);
+}
+
+// Completes an unfinished write of `dir`, if any, before the caller reads the cache.
+void finishPendingWrite(const std::string& dir) {
+	WriterPtr w;
+	{
+		RegistryLock l;
+		auto it = registry().find(dir);
+		if (it == registry().end()) return;
+		w = it->second;
+		registry().erase(it);
+	}
+	if (w->finished()) return;
+	LOG("Catalog cache: finishing the previous cache write before reading");
+	while (!w->step()) {}
+}
+
+class WriteCacheJob : public Job {
+public:
+	WriteCacheJob(std::string dir, WriterPtr w) : dir_(std::move(dir)), w_(std::move(w)) {}
+	// Also runs when the worker drops the job unfinished (stop(), a job that is never stepped): never leave files behind.
+	~WriteCacheJob() override {
+		w_->abandon();
+		forgetWrite(dir_, w_);
+	}
+
+	JobStep step(JobContext& ctx) override {
+		if (!w_->finished() && ctx.cancelled()) {
+			LOG("Catalog cache: the write was cancelled%s", w_->committed() ? " after the commit" : ", the previous cache stays");
+			w_->abandon();
+		}
+		if (!w_->finished()) w_->step();
+		if (!w_->finished()) return JobStep::Pending;
+		forgetWrite(dir_, w_);
+		return JobStep::Done;
+	}
+
+private:
+	std::string dir_;
+	WriterPtr w_;
+};
 
 class LoadCatalogJob : public Job {
 public:
@@ -47,10 +121,10 @@ public:
 	}
 
 	// Cache and parse work runs inside one step() each (SD reads and writes and jansson cannot be sliced); each logs
-	// its duration. The job is of class Catalog, so only Background downloads wait for it.
+	// its duration. The job is of class Catalog, so only Background downloads wait for it. (The cache write is not part of
+	// it: see the WriteCacheJob comment.)
 	JobStep step(JobContext& ctx) override {
 		if (phase_ == Phase::Plan) return plan(ctx);
-		if (phase_ == Phase::WriteCache) return writeCache();
 		if (!xfer_) {
 			if (ctx.cancelled()) return finish(ctx, false, "Cancelled.");
 			startTransfer(ctx);
@@ -61,7 +135,7 @@ public:
 	}
 
 private:
-	enum class Phase { Plan, Net, WriteCache };
+	enum class Phase { Plan, Net };
 	static constexpr const char* kNoCacheText = "There is no saved catalog on the SD card, and the network is switched off.";
 
 	// A Refresh (without --offline) always fetches, so nothing is shown as "Reading cache…" for it.
@@ -74,6 +148,8 @@ private:
 		if (ctx.cancelled()) return finish(ctx, false, "Cancelled.");
 		catcache::Source src = catcache::Source::Fetch;
 		if (cache_) {
+			// The previous load's write must be complete (and its old generation gone) before anything is read.
+			finishPendingWrite(cfg_.cacheDir);
 			if (readsCacheFirst()) st_->stage.store(kReadCache);
 			const auto t0 = std::chrono::steady_clock::now();
 			catcache::Meta m;
@@ -181,15 +257,19 @@ private:
 		return finish(ctx, false, message);
 	}
 
-	JobStep writeCache() {
+	// Hands the fetched bodies to a Background job that writes them. Called after the catalog was delivered.
+	void submitCacheWrite(JobContext& ctx) {
 		catcache::Bodies b;
 		b.information = std::move(info_);
 		b.contents = std::move(contents_);
 		b.featured = std::move(featured_);
-		// Runs to the end even when the job was cancelled meanwhile (stop(), the loader destroyed): the cache then never
-		// holds half a write, and the next write would clean up either way.
-		cache_->write(b, base_, cfg_.appVersion, fetchedAt_);
-		return JobStep::Done;
+		auto w = std::make_shared<catcache::Cache::Writer>(*cache_, std::move(b), base_, cfg_.appVersion, fetchedAt_);
+		{
+			RegistryLock l;
+			registry()[cfg_.cacheDir] = w;
+		}
+		// 0 (a stopping worker) destroys the job on the spot, which abandons and unregisters the writer: nothing is written.
+		ctx.worker.submit(JobClass::Background, "cache-write", std::make_unique<WriteCacheJob>(cfg_.cacheDir, w));
 	}
 
 	static constexpr const char* kNames[3] = {"/information", "/contents", "/featured-app"};
@@ -259,12 +339,11 @@ private:
 		b.catalog.fetchedAt = fetchedAt_;
 		st_->fromNetwork = true;
 		st_->catalog = std::move(b.catalog);
-		// The catalog goes to the main thread first; the cache write (slow on a Wii's SD card) follows in the next
-		// step, so Home does not wait for it. The cache is only written after a successful parse.
+		// The catalog goes to the main thread first; the cache write (slow on a Wii's SD card) is a separate Background job,
+		// so neither Home nor the icons wait for it. The cache is only written after a successful parse.
 		deliver(ctx, true, {});
-		if (!cache_) return JobStep::Done;
-		phase_ = Phase::WriteCache;
-		return JobStep::Pending;
+		if (cache_) submitCacheWrite(ctx);
+		return JobStep::Done;
 	}
 
 	void deliver(JobContext& ctx, bool ok, std::string error) {

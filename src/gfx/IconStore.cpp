@@ -7,14 +7,12 @@
 #include <vector>
 
 #include "catalog/Catalog.h"
+#include "core/Strings.h"
 
 namespace iconstore {
 
 namespace {
-std::string lower(std::string s) {
-	std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return char(std::tolower(c)); });
-	return s;
-}
+using strutil::lowerAscii;
 
 bool endsWith(const std::string& s, const char* suf) {
 	size_t n = std::char_traits<char>::length(suf);
@@ -65,7 +63,7 @@ bool remove(const std::string& cacheDir, std::string_view slug) {
 }
 
 Pruner::Pruner(std::string cacheDir, const std::set<std::string>& keep) : dir_(std::move(cacheDir)) {
-	for (const std::string& s : keep) keep_.insert(lower(s));
+	for (const std::string& s : keep) keep_.insert(lowerAscii(s));
 }
 
 bool Pruner::step(size_t perStep) {
@@ -96,7 +94,7 @@ bool Pruner::step(size_t perStep) {
 			todo_.push_back(n);
 		} else if (endsWith(n, ".png") && n.size() > 4) {
 			const std::string slug = n.substr(0, n.size() - 4);
-			if (isValidSlug(slug) && !keep_.count(lower(slug))) todo_.push_back(n);
+			if (isValidSlug(slug) && !keep_.count(lowerAscii(slug))) todo_.push_back(n);
 		}
 	}
 	if (next_ >= todo_.size() && at_ >= names_.size()) {

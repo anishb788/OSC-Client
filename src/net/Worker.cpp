@@ -208,6 +208,16 @@ void Worker::post(std::function<void()> fn) {
 	results_.push_back(std::move(fn));
 }
 
+size_t Worker::discardResults() {
+	std::vector<std::function<void()>> batch;
+	{
+		Lock l(mutex_);
+		batch.swap(results_);
+	}
+	// The closures die here, outside the lock (their destructors may take other locks), on the calling thread.
+	return batch.size();
+}
+
 size_t Worker::drainResults() {
 	std::vector<std::function<void()>> batch;
 	{

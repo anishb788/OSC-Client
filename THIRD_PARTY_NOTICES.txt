@@ -5,9 +5,13 @@ OpenShop is an Open Shop Channel client. The app catalog, metadata and icons it 
 Channel (https://oscwii.org), provided by the Open Shop Channel and the OSC Team. OpenShop is not affiliated with
 or endorsed by them.
 
+OpenShop itself is free software under the GNU General Public License, version 3 or (at your option) any later
+version (SPDX: GPL-3.0-or-later). See LICENSE.
+
 The Wii build (boot.dol) statically links the libraries below. The list comes from the linker map of the build
 (archive members actually pulled in), not from the package list. The texts are the ones shipped with the devkitPro
-packages the build uses.
+packages the build uses, or, where the packages ship no file, the notice in the installed headers; the last sections
+say exactly which and where, and where nothing ships at all.
 
   SDL2, SDL2_ttf, SDL2_image, SDL2_mixer   zlib licence (Sam Lantinga and contributors)
   FreeType                                  FreeType Licence (FTL)
@@ -17,9 +21,13 @@ packages the build uses.
   libogg, Opus, opusfile                    BSD 3-clause (Xiph.Org Foundation)
   libmodplug                                public domain (no licence text ships with the package)
   jansson                                   MIT
-  libogc (with libfat, wiiuse, bte,         libogc licence (zlib-style, plus the RTEMS notice in the same file)
-  wiikeyboard, aesnd)
-  newlib, libstdc++, libgcc                 devkitPPC runtime (licence texts not reproduced here)
+  libogc                                    libogc licence (zlib-style, plus the RTEMS notice in the same file)
+  libfat                                    ZPL-2.1 per the SPDX tag in its headers; no licence text ships
+  wiiuse, aesnd                             no text and no notice ships (see their section)
+  bte (lwBT)                                BSD 3-clause style notice in its header (EISLAB)
+  wiikeyboard                               zlib-style notice in its headers (plus a NetBSD BSD notice)
+  newlib                                    no licence file ships; per-file notices in its headers
+  libstdc++, libgcc                         GNU GPL version 3 with the GCC Runtime Library Exception
 
 Font: M PLUS Rounded 1c by the M+ FONTS Project, SIL Open Font License 1.1 (see assets/fonts/OFL.txt, also
 reproduced in the package as OFL.txt).
@@ -698,3 +706,297 @@ On-Line Applications Research Corporation.
  CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  POSSIBILITY OF SUCH DAMAGE.
+
+==============================================================================
+libogc: notices that ship with the toolchain
+==============================================================================
+
+The libogc LICENSE (file /opt/devkitpro/libogc/LICENSE in the devkitPPC image) is reproduced above. It covers libogc
+itself plus the RTEMS-derived notice in the same file. It does NOT cover the other libraries that are linked from
+/opt/devkitpro/libogc/lib/wii/ (libfat, libwiiuse, libbte, libwiikeyboard) or the newlib C library. Where the image carries
+a notice for one of them, it is reproduced below with the path it came from. Where it carries none, that is said.
+The text below is quoted from the headers in the image, not from the upstream projects.
+
+==============================================================================
+libogc: wpad.h (/opt/devkitpro/libogc/include/wiiuse/wpad.h)
+==============================================================================
+
+wpad.h -- Wiimote Application Programmers Interface
+
+Copyright (C) 2008
+Michael Wiedenbauer (shagkur)
+Dave Murphy (WinterMute)
+Hector Martin (marcan)
+
+This software is provided 'as-is', without any express or implied
+warranty.  In no event will the authors be held liable for any
+damages arising from the use of this software.
+
+Permission is granted to anyone to use this software for any
+purpose, including commercial applications, and to alter it and
+redistribute it freely, subject to the following restrictions:
+
+1.	The origin of this software must not be misrepresented; you
+must not claim that you wrote the original software. If you use
+this software in a product, an acknowledgment in the product
+documentation would be appreciated but is not required.
+
+2.	Altered source versions must be plainly marked as such, and
+must not be misrepresented as being the original software.
+
+3.	This notice may not be removed or altered from any source
+distribution.
+
+==============================================================================
+libfat (libfat.a, /opt/devkitpro/libogc/lib/wii/libfat.a)
+==============================================================================
+
+The devkitPPC image ships no licence text for libfat. Its headers /opt/devkitpro/libogc/include/fat.h and dvm.h state:
+
+  SPDX-License-Identifier: ZPL-2.1
+  SPDX-FileCopyrightText: Copyright fincs, devkitPro
+
+(the Zope Public License 2.1). The full text of that licence is not in the image and is not reproduced here.
+
+==============================================================================
+wiiuse (libwiiuse.a) and aesnd (libaesnd.a)
+==============================================================================
+
+The devkitPPC image ships no licence text for wiiuse, and /opt/devkitpro/libogc/include/wiiuse/wiiuse.h carries no
+copyright or licence notice. Nothing is reproduced here for that reason. OpenShop is GPL-3.0-or-later, which is compatible
+with wiiuse whether wiiuse is available under the GPL or the LGPL; which of them applies is for the wiiuse project to say.
+
+aesnd: the same holds for /opt/devkitpro/libogc/include/aesndlib.h, which carries no notice, and no aesnd text ships either.
+
+==============================================================================
+lwBT, the Bluetooth stack in libbte (libbte.a; /opt/devkitpro/libogc/include/bte/bd_addr.h)
+==============================================================================
+
+Copyright (c) 2003 EISLAB, Lulea University of Technology.
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+3. The name of the author may not be used to endorse or promote products
+   derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR IMPLIED
+WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT
+SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT
+OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
+IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY
+OF SUCH DAMAGE.
+
+This file is part of the lwBT Bluetooth stack.
+
+Author: Conny Ohult <conny@sm.luth.se>
+
+==============================================================================
+libwiikeyboard (libwiikeyboard.a; /opt/devkitpro/libogc/include/wiikeyboard/keyboard.h, usbkeyboard.h)
+==============================================================================
+
+keyboard.h -- keyboard event system
+
+Copyright (C) 2008, 2009
+DAVY Guillaume davyg2@gmail.com
+Brian Johnson brijohn@gmail.com
+dhewg
+
+This software is provided 'as-is', without any express or implied
+warranty.  In no event will the authors be held liable for any
+damages arising from the use of this software.
+
+Permission is granted to anyone to use this software for any
+purpose, including commercial applications, and to alter it and
+redistribute it freely, subject to the following restrictions:
+
+1.	The origin of this software must not be misrepresented; you
+must not claim that you wrote the original software. If you use
+this software in a product, an acknowledgment in the product
+documentation would be appreciated but is not required.
+
+2.	Altered source versions must be plainly marked as such, and
+must not be misrepresented as being the original software.
+
+3.	This notice may not be removed or altered from any source
+distribution.
+
+(usbkeyboard.h carries the same text with the copyright line "DAVY Guillaume davyg2@gmail.com, dhewg".)
+
+==============================================================================
+libwiikeyboard: wsksymdef.h (/opt/devkitpro/libogc/include/wiikeyboard/wsksymdef.h)
+==============================================================================
+
+Copyright (c) 1997 The NetBSD Foundation, Inc.
+All rights reserved.
+
+This code is derived from software contributed to The NetBSD Foundation
+by Juergen Hannken-Illjes.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE NETBSD FOUNDATION, INC. AND CONTRIBUTORS
+``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE FOUNDATION OR CONTRIBUTORS
+BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+
+==============================================================================
+lwIP (headers only in this build)
+==============================================================================
+
+The libogc headers include lwIP's (e.g. /opt/devkitpro/libogc/include/lwip/api.h, netif/etharp.h). The linker map of the
+OpenShop build shows no lwIP object linked: the network code in the binary is libogc's network_wii.o and soc_*.o, which
+talk to IOS. The notice is reproduced anyway because the headers are installed with the toolchain. The text below is the
+one in netif/etharp.h; most lwIP headers carry the same text with only "Copyright (c) 2001-2004 Swedish Institute of
+Computer Science." (some files "2001," only, with the name of the Institute in clause 3), and etharp.h also names Leon
+Woestenberg and Axon Digital Design B.V.
+
+Copyright (c) 2001-2003 Swedish Institute of Computer Science.
+Copyright (c) 2003-2004 Leon Woestenberg <leon.woestenberg@axon.tv>
+Copyright (c) 2003-2004 Axon Digital Design B.V., The Netherlands.
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+3. The name of the author may not be used to endorse or promote products
+   derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR IMPLIED
+WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT
+SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT
+OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
+IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY
+OF SUCH DAMAGE.
+
+This file is part of the lwIP TCP/IP stack.
+
+Author: Adam Dunkels <adam@sics.se>
+
+==============================================================================
+BSD-derived network headers shipped with libogc (sys/socket.h, netdb.h, poll.h, netinet/*, net/*)
+==============================================================================
+
+Headers such as /opt/devkitpro/libogc/include/sys/socket.h and netinet/in.h are tagged SPDX-License-Identifier:
+BSD-3-Clause, netdb.h "(BSD-3-Clause AND ISC)", and poll.h BSD-3-Clause. OpenShop includes poll.h, sys/socket.h and netdb.h.
+The University of California text, as in sys/socket.h:
+
+Copyright (c) 1982, 1985, 1986, 1988, 1993, 1994
+	The Regents of the University of California.  All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+3. Neither the name of the University nor the names of its contributors
+   may be used to endorse or promote products derived from this software
+   without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+SUCH DAMAGE.
+
+netdb.h adds this notice for portions:
+
+Portions Copyright (c) 1993 by Digital Equipment Corporation.
+
+Permission to use, copy, modify, and distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies, and that
+the name of Digital Equipment Corporation not be used in advertising or
+publicity pertaining to distribution of the document or software without
+specific, written prior permission.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND DIGITAL EQUIPMENT CORP. DISCLAIMS ALL
+WARRANTIES WITH REGARD TO THIS SOFTWARE, INCLUDING ALL IMPLIED WARRANTIES
+OF MERCHANTABILITY AND FITNESS.   IN NO EVENT SHALL DIGITAL EQUIPMENT
+CORPORATION BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL
+DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR
+PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS
+ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS
+SOFTWARE.
+
+poll.h (Peter Wemm):
+
+Copyright (c) 1997 Peter Wemm <peter@freebsd.org>
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+3. The name of the author may not be used to endorse or promote products
+   derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+SUCH DAMAGE.
+
+==============================================================================
+newlib (libc.a, libm.a, libsysbase.a), libstdc++ and libgcc
+==============================================================================
+
+newlib: the devkitPPC image does not ship a newlib licence file (no COPYING.NEWLIB or similar was found under /opt/devkitpro),
+so none is reproduced here. The installed newlib headers carry per-file notices from their authors (for example
+/opt/devkitpro/devkitPPC/powerpc-eabi/include/stdio.h carries a Regents of the University of California notice); upstream
+newlib collects them in its own COPYING files.
+
+libstdc++ and libgcc (GCC 16.2.0 in the image) are licensed under the GNU GPL version 3 with the GCC Runtime Library
+Exception, which is what allows programs under other licences to link them.

@@ -5,5 +5,5 @@
 	<version>0.2.0</version>
 	<release_date></release_date>
 	<short_description>Open Shop Channel client</short_description>
-	<long_description>OpenShop is an Open Shop Channel client: a Wii Shop style browser for the homebrew apps in the Open Shop Channel catalog.</long_description>
+	<long_description>OpenShop is an Open Shop Channel client: a Wii Shop style browser for the homebrew apps in the Open Shop Channel catalog. Free software, GPL-3.0-or-later.</long_description>
 </app>

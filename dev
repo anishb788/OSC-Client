@@ -33,7 +33,7 @@
 #   Dolphin); on PC they are exported as OPENSHOP_START / _MOCK / _OFFLINE / _REFRESH / _FAIL / _TOPBAR / _MOCKDELAY / _RATELIMIT / _CACHETTL / _API / _ICONS / _AUTOREFRESH / _PERF / _NETTEST / _NETTESTBG / _NETTESTQUIT.
 #   Dolphin's virtual SD card is synced with ./sdcard (put bgm.mp3 in sdcard/apps/OpenShop/).
 #   ./sdcard is a symlink to .dolphin/sdcard; .dolphin/ is the only repo dir Dolphin may write to.
-#   ./dev package             build dist/OpenShop.zip for the Homebrew Channel (SD:/apps/OpenShop)
+#   ./dev package             clean release build (never DEBUGTOOLS) into dist/OpenShop.zip for the Homebrew Channel (SD:/apps/OpenShop)
 #   ./dev wiiload             send the .dol to a real Wii running HBC (set WIILOAD=tcp:<wii-ip>)
 #   ./dev headers             copy SDK headers to .devkitpro/ for editor IntelliSense
 #   ./dev shell               open a shell inside the toolchain container
@@ -330,14 +330,22 @@ watch() {
 # ---------------------------------------------------------------- misc
 
 package() {
-	build
+	# Always a clean release build: objects and flags from an earlier DEBUGTOOLS / WERROR build must never reach the zip.
+	# DEBUGTOOLS=0 on the command line also beats a DEBUGTOOLS exported in the shell.
+	info "Clean release build for the package"
+	dkp make clean >/dev/null
+	build DEBUGTOOLS=0 WERROR=0 || return 1
+	# The on-screen test bench's banner only exists in DEBUGTOOLS builds; refuse to ship one.
+	if grep -aq "DEBUG BUILD" "$TARGET.dol"; then
+		err "$TARGET.dol contains the 'DEBUG BUILD' marker: refusing to package a DEBUGTOOLS build"; return 1
+	fi
 	local stage="build/package/apps/$TARGET"
 	rm -rf build/package && mkdir -p "$stage" dist
 	cp "$TARGET.dol" "$stage/boot.dol"
 	install_meta "$stage/meta.xml"
 	[[ -f hbc/icon.png ]] && cp hbc/icon.png "$stage/"
-	# Licence texts the statically linked libraries and the bundled font require us to pass on.
-	cp THIRD_PARTY_NOTICES.txt "$stage/"
+	# OpenShop's own licence plus the texts the statically linked libraries and the bundled font require us to pass on.
+	cp LICENSE THIRD_PARTY_NOTICES.txt "$stage/"
 	cp assets/fonts/OFL.txt "$stage/OFL.txt"
 	rm -f "dist/$TARGET.zip"
 	(cd build/package && python3 -m zipfile -c "$ROOT/dist/$TARGET.zip" apps)
@@ -409,7 +417,7 @@ case "$cmd" in
 	watch)    STOP_ON_INT=tty watch build launch_dolphin stop_dolphin ;;
 	pc)       pc_build && { trap 'stop_pc; exit 0' INT TERM; launch_pc; wait "$(cat build-pc/.pid)" || true; rm -f build-pc/.pid; } ;;
 	watch-pc) watch pc_build launch_pc stop_pc ;;
-	clean)    dkp make clean; make -f Makefile.pc clean >/dev/null; make -f Makefile.pc SAN=1 clean >/dev/null; rm -rf dist ;;
+	clean)    dkp make clean; make -f Makefile.pc clean >/dev/null; make -f Makefile.pc SAN=1 clean >/dev/null; make -f Makefile.pc DEBUGTOOLS=1 clean >/dev/null; rm -rf dist ;;
 	package) package ;;
 	wiiload)
 		[[ -n "${WIILOAD:-}" ]] || { err "Set WIILOAD=tcp:<wii-ip> first"; exit 1; }

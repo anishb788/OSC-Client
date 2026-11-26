@@ -76,6 +76,10 @@ static void testDevOptions() {
 
 	o = parse("screen=search\nfail=1");
 	CHECK(o.describe() == "screen=search mock=0 offline=0 refresh=0 fail=startup topbar=default mockdelay=-1 ratelimit=-1 perf=0");
+	// active(): empty for a normal launch (the default screen "home" included), otherwise only what was changed.
+	CHECK(parse("").active().empty() && parse("screen=home\n").active().empty());
+	CHECK(parse("mock=1\nfail=both\nratelimit=0\n").active() == "mock=1 fail=both ratelimit=0");
+	CHECK(parse("screen=detail\ncachettl=0\n").active() == "screen=detail cachettl=0");
 	CHECK(parse("perf=1").describe().find("perf=1") != std::string::npos);
 	CHECK(parse("fail=both\nmockdelay=900\n").describe().find("fail=both") != std::string::npos);
 	CHECK(parse("fail=refresh").describe().find("fail=refresh") != std::string::npos);

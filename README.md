@@ -95,7 +95,7 @@ the same file, so **delete `devstart`** from the SD card when you're done testin
   checked against: fixed and chunked bodies, redirects (including to https), a stalled response, junk JSON,
   a slow download, and `/headers`, which echoes the request head so the User-Agent can be checked. Point the app at it
   with `./dev pc --api http://127.0.0.1:<port>/api/v4` (catalog requests then reach its `/headers`-style logging); it logs every request head to stderr.
-- **Debug build for real hardware:** `./dev build DEBUGTOOLS=1` (run `./dev clean` when switching) builds an
+- **Debug build for real hardware:** `./dev build DEBUGTOOLS=1` (switching between debug and normal rebuilds by itself; `./dev package` always makes a clean release build) builds an
   on-screen network test bench. Every log line goes to the screen and to
   `sd:/apps/OpenShop/debuglog.txt`, and per-test logs next to it. Don't ship this build.
 - **Dolphin networking:** Dolphin emulates the Wii's network stack, so the app's libogc `net_*` code runs
@@ -129,8 +129,8 @@ the same file, so **delete `devstart`** from the SD card when you're done testin
 Everything lives in `sd:/apps/OpenShop/` (`sdcard/apps/OpenShop/` in Dolphin and on PC; `OPENSHOP_DATA` overrides it on PC):
 
 ```
-boot.dol, meta.xml, icon.png   the Homebrew Channel package (./dev package)
-THIRD_PARTY_NOTICES.txt, OFL.txt   licence texts for the linked libraries and the font
+boot.dol, meta.xml             the Homebrew Channel package (./dev package); an icon.png is optional and not yet provided
+LICENSE, THIRD_PARTY_NOTICES.txt, OFL.txt   OpenShop's licence, and the notices for the linked libraries and the font
 bgm.mp3 or bgm.ogg             optional background music (you provide it)
 cache/
   cache.json                   manifest: format, base URL, fetch time (the commit point of a cache write)
@@ -148,7 +148,7 @@ Deleting `cache/` is always safe.
 ```
 src/
   App.*            screen stack, transitions, dialogs, main loop
-  core/            shared types, input, logging
+  core/            shared types, input, logging, dev options (DevOptions), SD file helpers (FileUtil)
   platform/        Wii (WPAD/IR, SD paths) vs. PC (SDL mouse/keyboard)
   gfx/             renderer helpers (AA rounded rects, SDF icons, cursor), text cache, theme
   ui/              immediate-mode UI: focus, pointer + D-pad spatial navigation, widgets
@@ -161,18 +161,42 @@ assets/fonts/      M PLUS Rounded 1c, Latin subset (SIL OFL 1.1, see OFL.txt)
 
 ## Roadmap
 
+1. **Foundation (done):** the UI, navigation, input and the mock catalog.
 2. **Live catalog (done):** `hbb1.oscwii.org/api/v4`, real icons, offline cache, Refresh.
 3. **Installing:** download queue, MD5 check, extract to SD or USB, detect installed apps and updates, uninstall.
-4. **Polish:** HTTPS, settings, GameCube controller support.
+4. **Polish:** settings, GameCube controller support.
 
 ## Credits
 
-App catalog and metadata: the Open Shop Channel and the Open Shop Channel Team.
+App catalog and metadata: the Open Shop Channel, the Open Shop Channel Team and Repository Manager. OpenShop follows the
+[OSC API usage guidelines](https://oscwii.org): every request identifies itself with the User-Agent above, the app
+credits the Open Shop Channel, the OSC Team and Repository Manager on its loading screen and on Home, it describes itself
+as an "Open Shop Channel client", and it is free software that neither mirrors oscwii.org's library under another name
+nor carries ads or a price.
 Font: M PLUS Rounded 1c by the M+ FONTS Project (SIL Open Font License 1.1, `assets/fonts/OFL.txt`).
 
 OpenShop isn't affiliated with or endorsed by the Open Shop Channel. The Wii build statically links SDL2,
 SDL2_ttf, SDL2_image, SDL2_mixer, FreeType, HarfBuzz, libpng, zlib, bzip2, Brotli, libogg, Opus, opusfile,
-libmodplug, jansson and libogc (with libfat, wiiuse, bte, wiikeyboard and aesnd). Their licence texts are in
-`THIRD_PARTY_NOTICES.txt`, which `./dev package` copies next to `boot.dol`.
+libmodplug, jansson, and from devkitPro libogc, libfat, wiiuse, bte (lwBT), libwiikeyboard, aesnd, newlib,
+libstdc++ and libgcc. `THIRD_PARTY_NOTICES.txt`, which `./dev package` copies next to `boot.dol`, says for each of them
+where its licence text or notice comes from. libogc's LICENSE covers only libogc; for libfat, wiiuse and aesnd the
+devkitPPC image ships no licence text, and the notice file says so. libstdc++ and libgcc are GPLv3 with the GCC Runtime
+Library Exception.
 
 Portions of this software are copyright (c) The FreeType Project (www.freetype.org). All rights reserved.
+
+## Licence
+
+OpenShop is free software. SPDX-License-Identifier: GPL-3.0-or-later
+
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public
+License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later
+version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied
+warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with this program (the file `LICENSE`). If not,
+see <https://www.gnu.org/licenses/>.
+
+The libraries it links keep their own licences (`THIRD_PARTY_NOTICES.txt`); the font is under the SIL OFL 1.1.

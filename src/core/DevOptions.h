@@ -62,4 +62,7 @@ struct DevOptions {
 	// Parses a `fail` value into failStartup / failRefresh.
 	static void parseFail(const std::string& val, DevOptions& o);
 	std::string describe() const;
+	// Only the options that differ from a normal launch, e.g. "mock=1 fail=startup"; "" when none is set. Used for the
+	// one warning line a normal build logs when a devstart file or the environment changed its behaviour.
+	std::string active() const;
 };

@@ -827,8 +827,9 @@ static void expectCompleteCache(CacheEnv& env, uint32_t gen) {
 	CHECK(files == 4);
 }
 
-// M3: stop() while the job is in its WriteCache step. The step runs to its end, so the cache is whole afterwards,
-// and the wait is bounded by that one step.
+// M4: stop() while the cache write is under way. The write is a Background job that stop() cancels, so it ends at the
+// next slice boundary and abandons: the directory then holds either no cache at all (nothing committed yet) or a complete
+// one (stopped after the commit), never a half-written one. The wait is bounded by one slice.
 static void testStopDuringCacheWrite() {
 	LoopbackServer srv;
 	serveFixtures(srv);
@@ -839,17 +840,33 @@ static void testStopDuringCacheWrite() {
 	auto w = std::make_unique<Worker>(posixFactory(), false);
 	CHECK(w->start());
 	auto l = makeNetworkLoader(w.get(), cfg);
-	CHECK(waitFor([&] { return g_fsCalls > 0; }));   // the first rename of the write: the step is under way
+	CHECK(waitFor([&] { return g_fsCalls > 0; }));   // the first rename of the write: a slice is under way
 	const int64_t t0 = nowMs();
 	w->stop();
 	CHECK(nowMs() - t0 < 3000);
 	l.reset();
 	w.reset();
 	resetFs(0);
+	bool ok = false;
+	readMetaOf(env, &ok);
+	if (ok) {
+		expectCompleteCache(env, 1);
+	} else {
+		// Abandoned before the commit: not one file of ours is left behind.
+		size_t files = 0;
+		if (fs::exists(env.dir)) for (auto& e : fs::directory_iterator(env.dir)) { (void)e; files++; }
+		CHECK(files == 0);
+	}
+	// Either way the next start works: a fresh fetch, or a read of the complete cache.
+	Worker w2(posixFactory(), false);
+	CHECK(w2.start());
+	Outcome again = loadOnce(w2, cacheCfg(env, srv.url("/api/v4")));
+	CHECK(again.st.state == LoadStatus::State::Done);
 	expectCompleteCache(env, 1);
 }
 
-// M3: the loader destroyed (B, Retry, Exit) while the write step runs: the cancel does not cut the write short.
+// M4: the loader destroyed (B, Retry, Exit) after it delivered. The write is its own job, so destroying the loader does
+// not touch it: it runs to the end.
 static void testCancelDuringCacheWrite() {
 	LoopbackServer srv;
 	serveFixtures(srv);
@@ -870,8 +887,8 @@ static void testCancelDuringCacheWrite() {
 	CHECK(again.st.state == LoadStatus::State::Done && !again.st.fromNetwork && srv.requests().size() == 3);
 }
 
-// M3: a load queued behind a job that is still writing. The worker runs one Catalog job at a time, so the second
-// job's cache read happens after the first one's write, and the two writes never overlap.
+// M4: a load queued behind a write. The write is a Background job in slices; the next Catalog job finishes any pending
+// write before it reads the cache (so it never reads during one) and the two writes never overlap.
 static void testJobQueuedBehindWrite() {
 	LoopbackServer srv;
 	serveFixtures(srv);
@@ -912,6 +929,43 @@ static void testJobQueuedBehindWrite() {
 	CHECK(g_fsMaxDepth.load() <= 1);   // never two filesystem operations at once, i.e. never two writes at once
 	resetFs(0);
 	expectCompleteCache(env, 3);
+}
+
+// M4: an icon-class job runs while a slow cache write is in progress (the point of moving the write out of the
+// Catalog job): it finishes between two slices, before the manifest is committed.
+struct MarkJob : Job {
+	std::atomic<bool>& done;
+	std::atomic<bool>& manifestExisted;
+	std::string manifest;
+	MarkJob(std::atomic<bool>& d, std::atomic<bool>& m, std::string path) : done(d), manifestExisted(m), manifest(std::move(path)) {}
+	JobStep step(JobContext&) override {
+		manifestExisted = fs::exists(manifest);
+		done = true;
+		return JobStep::Done;
+	}
+};
+
+static void testIconRunsDuringCacheWrite() {
+	LoopbackServer srv;
+	serveFixtures(srv);
+	CacheEnv env;
+	std::atomic<bool> done{false}, manifestExisted{false};
+	Worker w(posixFactory(), false);
+	CHECK(w.start());
+	NetLoaderConfig cfg = cacheCfg(env, srv.url("/api/v4"));
+	slowFs(cfg);
+	resetFs(100);   // every rename/remove takes 100 ms: the write needs well over 300 ms in total
+	auto l = makeNetworkLoader(&w, cfg);
+	CHECK(waitFor([&] { w.drainResults(); return g_fsCalls > 0; }));   // the first body's rename: the write is under way
+	CHECK(w.submit(JobClass::Icon, "icon", std::make_unique<MarkJob>(done, manifestExisted, env.file("cache.json"))) != 0);
+	CHECK(waitFor([&] { return done.load(); }, 5000));
+	CHECK(!manifestExisted);          // it ran before the write committed...
+	CHECK(w.pending() >= 1);          // ...with the write still pending
+	CHECK(runUntilDone(w, *l).state == LoadStatus::State::Done);
+	CHECK(waitFor([&] { w.drainResults(); return w.pending() == 0; }));
+	l.reset();
+	resetFs(0);
+	expectCompleteCache(env, 1);
 }
 
 // M2: an I/O error while reading the cache is "missing this time": nothing is deleted, whatever the mode.
@@ -1055,6 +1109,7 @@ int main() {
 	testStopDuringCacheWrite();
 	testCancelDuringCacheWrite();
 	testJobQueuedBehindWrite();
+	testIconRunsDuringCacheWrite();
 	testCacheReadErrorKeepsCache();
 	testCacheUnknownClock();
 	if (failures) { std::printf("netloader_test: %d failure(s)\n", failures); return 1; }

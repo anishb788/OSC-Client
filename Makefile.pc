@@ -30,13 +30,29 @@ CXXFLAGS := -std=gnu++20 -g -O1 $(WARN) $(SANFLAGS) $(DEFS) -Isrc -MMD -MP $(she
 ASFLAGS  := -Wa,-I.
 LDLIBS   := $(shell pkg-config --libs $(PKGS)) -lz -lm
 
+# The flags this build dir was made with (same idea as build/.flags in Makefile). Rewritten only when they change, so
+# WERROR=1 on a built tree recompiles, and a plain build afterwards recompiles again.
+STAMP := $(BUILD)/.flags
+.PHONY: FORCE
+.DEFAULT_GOAL := $(TARGET)
+# Under `make -n` a FORCE'd stamp would be assumed rewritten and make every object look out of date, so a dry run only
+# checks that the stamp exists (the flag comparison is for real builds).
+ifneq ($(findstring n,$(firstword -$(MAKEFLAGS))),)
+STAMPDEP :=
+else
+STAMPDEP := FORCE
+endif
+$(STAMP): $(STAMPDEP)
+	@mkdir -p $(BUILD)
+	@printf '%s\n' '$(CXXFLAGS)' | cmp -s - $@ || printf '%s\n' '$(CXXFLAGS)' > $@
+
 SRCS := $(shell find src -name '*.cpp')
 OBJS := $(SRCS:%.cpp=$(BUILD)/%.o) $(BUILD)/src/assets.o
 
 $(TARGET): $(OBJS)
 	$(CXX) $(SANFLAGS) -o $@ $^ $(LDLIBS)
 
-$(BUILD)/%.o: %.cpp
+$(BUILD)/%.o: %.cpp $(STAMP)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
@@ -44,137 +60,75 @@ $(BUILD)/src/assets.o: src/assets.S $(wildcard assets/fonts/*.ttf)
 	@mkdir -p $(dir $@)
 	$(CXX) $(ASFLAGS) -c $< -o $@
 
-# Host-side tests for pure logic (no SDL). Not part of the app or the Wii build.
-TESTBIN := $(BUILD)/tests/catalog_test
-TESTCXX := -std=gnu++20 -g -O1 $(WARN) $(SANFLAGS) -Isrc
+# Host-side tests (no app, mostly no SDL window). Not part of the app or the Wii build.
+# Every test is linked from per-file objects in $(BUILD)/tobj/ compiled with -MMD -MP, so editing any header or source
+# rebuilds exactly the tests that include it (no hand-listed header dependencies to go stale). Test objects are kept
+# apart from the app's: they are built without DEFS, so a DEBUGTOOLS build dir never gets the debug log hooks in tests.
+# Fixtures under tests/fixtures/ are read at run time, so they are not build dependencies.
+TESTCXX := -std=gnu++20 -g -O1 $(WARN) $(SANFLAGS) -Isrc -Itests -pthread -MMD -MP $(shell pkg-config --cflags sdl2 SDL2_image jansson)
+SDLLIBS := $(shell pkg-config --libs sdl2)
+JANSSONLIBS := $(shell pkg-config --libs jansson)
 
-$(TESTBIN): tests/catalog_test.cpp src/catalog/Catalog.cpp src/catalog/MockCatalog.cpp src/catalog/Catalog.h
+tobj = $(patsubst %.cpp,$(BUILD)/tobj/%.o,$(1))
+
+$(BUILD)/tobj/%.o: %.cpp $(STAMP)
 	@mkdir -p $(dir $@)
-	$(CXX) $(TESTCXX) -o $@ tests/catalog_test.cpp src/catalog/Catalog.cpp src/catalog/MockCatalog.cpp
+	$(CXX) $(TESTCXX) -c $< -o $@
 
-CORETEST := $(BUILD)/tests/core_test
-
-$(CORETEST): tests/core_test.cpp src/core/DevOptions.cpp src/core/DevOptions.h src/catalog/InstallGuard.h src/catalog/RefreshPolicy.h src/catalog/LoadTracker.h
-	@mkdir -p $(dir $@)
-	$(CXX) $(TESTCXX) -o $@ tests/core_test.cpp src/core/DevOptions.cpp
-
-TOPBARTEST := $(BUILD)/tests/topbar_test
-
-$(TOPBARTEST): tests/topbar_test.cpp src/ui/TopBarLayout.h
-	@mkdir -p $(dir $@)
-	$(CXX) $(TESTCXX) -o $@ tests/topbar_test.cpp
-
-LAYOUTTEST := $(BUILD)/tests/layout_test
-
-$(LAYOUTTEST): tests/layout_test.cpp src/ui/HomeLayout.h
-	@mkdir -p $(dir $@)
-	$(CXX) $(TESTCXX) -o $@ tests/layout_test.cpp
-
-HTTPPARSETEST := $(BUILD)/tests/http_parse_test
-
-$(HTTPPARSETEST): tests/http_parse_test.cpp src/net/HttpParse.cpp src/net/HttpParse.h src/net/Http.h src/net/Sinks.cpp src/core/FileUtil.cpp src/core/FileUtil.h src/core/Version.h
-	@mkdir -p $(dir $@)
-	$(CXX) $(TESTCXX) -o $@ tests/http_parse_test.cpp src/net/HttpParse.cpp src/net/Sinks.cpp src/core/FileUtil.cpp
-
-HTTPTRANSFERTEST := $(BUILD)/tests/http_transfer_test
-
-$(HTTPTRANSFERTEST): tests/http_transfer_test.cpp tests/FakeTransport.h src/net/HttpTransfer.cpp src/net/HttpTransfer.h src/net/Transport.h src/net/HttpParse.cpp src/net/HttpParse.h src/net/Http.h src/net/Sinks.cpp src/core/FileUtil.cpp src/core/FileUtil.h src/core/Log.h src/core/Version.h
-	@mkdir -p $(dir $@)
-	$(CXX) $(TESTCXX) -Itests -o $@ tests/http_transfer_test.cpp src/net/HttpTransfer.cpp src/net/HttpParse.cpp src/net/Sinks.cpp src/core/FileUtil.cpp
-
-# Real sockets over loopback (a server thread inside the test), so -pthread. No SDL.
-HTTPPOSIXTEST := $(BUILD)/tests/http_posix_test
 NETSRCS := src/net/HttpTransfer.cpp src/net/HttpPosix.cpp src/net/HttpParse.cpp src/net/Sinks.cpp src/core/FileUtil.cpp
-NETDEPS := $(NETSRCS) src/net/HttpTransfer.h src/net/HttpPosix.h src/net/Transport.h src/net/HttpParse.h src/net/Http.h src/core/Log.h src/core/Version.h tests/LoopbackServer.h
-
-$(HTTPPOSIXTEST): tests/http_posix_test.cpp $(NETDEPS)
-	@mkdir -p $(dir $@)
-	$(CXX) $(TESTCXX) -Itests -pthread -o $@ tests/http_posix_test.cpp $(NETSRCS)
-
-# The worker uses SDL threads and mutexes (no SDL_Init), so this one links SDL like gfx_test.
-WORKERTEST := $(BUILD)/tests/worker_test
-
-$(WORKERTEST): tests/worker_test.cpp src/net/Worker.cpp src/net/Worker.h $(NETDEPS)
-	@mkdir -p $(dir $@)
-	$(CXX) $(TESTCXX) -Itests -pthread $(shell pkg-config --cflags sdl2) -o $@ tests/worker_test.cpp src/net/Worker.cpp $(NETSRCS) $(shell pkg-config --libs sdl2)
-
-# The self-test's script parser. NetSelfTest.cpp references the worker, so those sources are linked too.
-NETTESTTEST := $(BUILD)/tests/nettest_script_test
-
-$(NETTESTTEST): tests/nettest_script_test.cpp src/net/NetSelfTest.cpp src/net/NetSelfTest.h src/net/Worker.cpp src/net/Worker.h $(NETDEPS)
-	@mkdir -p $(dir $@)
-	$(CXX) $(TESTCXX) -pthread $(shell pkg-config --cflags sdl2) -o $@ tests/nettest_script_test.cpp src/net/NetSelfTest.cpp src/net/Worker.cpp $(NETSRCS) $(shell pkg-config --libs sdl2)
-
-# The OSC API parser. Reads tests/fixtures/ relative to the repo root (where make runs the tests).
-OSCAPITEST := $(BUILD)/tests/oscapi_test
-
-$(OSCAPITEST): tests/oscapi_test.cpp src/catalog/OscApi.cpp src/catalog/OscApi.h src/catalog/Catalog.cpp src/catalog/Catalog.h src/core/Log.h $(wildcard tests/fixtures/*)
-	@mkdir -p $(dir $@)
-	$(CXX) $(TESTCXX) $(shell pkg-config --cflags jansson) -o $@ tests/oscapi_test.cpp src/catalog/OscApi.cpp src/catalog/Catalog.cpp $(shell pkg-config --libs jansson)
-
-# The live catalog loader against the loopback server (real fixtures) and FakeTransport. Reads tests/fixtures/.
-NETLOADERTEST := $(BUILD)/tests/netloader_test
-
-$(NETLOADERTEST): tests/netloader_test.cpp src/catalog/NetLoader.cpp src/catalog/NetLoader.h src/catalog/CatalogLoader.h src/catalog/CatalogLoader.cpp src/catalog/MockLoader.cpp src/catalog/MockCatalog.cpp src/core/DevOptions.cpp src/catalog/OscApi.cpp src/catalog/OscApi.h src/catalog/CatalogCache.cpp src/catalog/CatalogCache.h src/catalog/Catalog.cpp src/catalog/Catalog.h src/net/Worker.cpp src/net/Worker.h tests/FakeTransport.h $(NETDEPS) $(wildcard tests/fixtures/*)
-	@mkdir -p $(dir $@)
-	$(CXX) $(TESTCXX) -Itests -pthread $(shell pkg-config --cflags sdl2 jansson) -o $@ tests/netloader_test.cpp src/catalog/NetLoader.cpp src/catalog/CatalogLoader.cpp src/catalog/MockLoader.cpp src/catalog/MockCatalog.cpp src/core/DevOptions.cpp src/catalog/OscApi.cpp src/catalog/CatalogCache.cpp src/catalog/Catalog.cpp src/net/Worker.cpp $(NETSRCS) $(shell pkg-config --libs sdl2 jansson)
-
-# The catalog cache: manifest, atomic multi-file writes, TTL decisions. Reads tests/fixtures/ too. No SDL.
-CACHETEST := $(BUILD)/tests/cache_test
-
-$(CACHETEST): tests/cache_test.cpp src/catalog/CatalogCache.cpp src/catalog/CatalogCache.h src/core/FileUtil.cpp src/core/FileUtil.h src/catalog/OscApi.cpp src/catalog/OscApi.h src/catalog/Catalog.cpp src/catalog/Catalog.h src/core/Log.h $(wildcard tests/fixtures/*)
-	@mkdir -p $(dir $@)
-	$(CXX) $(TESTCXX) $(shell pkg-config --cflags jansson) -o $@ tests/cache_test.cpp src/catalog/CatalogCache.cpp src/core/FileUtil.cpp src/catalog/OscApi.cpp src/catalog/Catalog.cpp $(shell pkg-config --libs jansson)
-
-# Word wrapping (header only, fake font).
-WRAPTEST := $(BUILD)/tests/wrap_test
-
-$(WRAPTEST): tests/wrap_test.cpp src/gfx/Wrap.h
-	@mkdir -p $(dir $@)
-	$(CXX) $(TESTCXX) -o $@ tests/wrap_test.cpp
-
-# Dev tool, built by `make test` but not run (it needs a URL). See the header comment in the file.
-HTTPGET := $(BUILD)/tests/httpget
-
-$(HTTPGET): tests/httpget.cpp src/net/Worker.cpp src/net/Worker.h $(NETDEPS)
-	@mkdir -p $(dir $@)
-	$(CXX) $(TESTCXX) -pthread $(shell pkg-config --cflags sdl2) -o $@ tests/httpget.cpp src/net/Worker.cpp $(NETSRCS) $(shell pkg-config --libs sdl2)
-
-# The one test that needs SDL: draws the button helpers into a software renderer (no window, no display).
-GFXTEST := $(BUILD)/tests/gfx_test
-
-$(GFXTEST): tests/gfx_test.cpp src/gfx/Gfx.cpp src/gfx/Gfx.h src/gfx/Theme.h src/core/Types.h
-	@mkdir -p $(dir $@)
-	$(CXX) $(TESTCXX) $(shell pkg-config --cflags sdl2) -o $@ tests/gfx_test.cpp src/gfx/Gfx.cpp $(shell pkg-config --libs sdl2) -lm
-
-# Real icons: PNG validation, the SD icon store, the IconCache state machine and LRU against a real worker and a loopback
-# server serving tests/fixtures/icons/*.png. Textures go to an SDL software renderer. Needs SDL_image.
-ICONTEST := $(BUILD)/tests/icon_test
 ICONSRCS := src/gfx/IconCache.cpp src/gfx/IconPng.cpp src/gfx/IconStore.cpp src/catalog/Catalog.cpp src/net/Worker.cpp $(NETSRCS)
+LOADERSRCS := src/catalog/NetLoader.cpp src/catalog/CatalogLoader.cpp src/catalog/MockLoader.cpp src/catalog/MockCatalog.cpp src/core/DevOptions.cpp src/catalog/OscApi.cpp src/catalog/CatalogCache.cpp src/catalog/Catalog.cpp src/net/Worker.cpp $(NETSRCS)
 
-$(ICONTEST): tests/icon_test.cpp src/gfx/IconCache.h src/gfx/IconPng.h src/gfx/IconStore.h src/gfx/TextEvict.h $(ICONSRCS) $(NETDEPS) $(wildcard tests/fixtures/icons/*)
-	@mkdir -p $(dir $@)
-	$(CXX) $(TESTCXX) -Itests -pthread $(shell pkg-config --cflags sdl2 SDL2_image) -o $@ tests/icon_test.cpp $(ICONSRCS) $(shell pkg-config --libs sdl2 SDL2_image) -lz
+# name -> sources (tests/<name>.cpp is added automatically) and extra link libraries.
+TESTS := catalog_test core_test topbar_test layout_test http_parse_test http_transfer_test http_posix_test worker_test \
+         nettest_script_test oscapi_test netloader_test cache_test wrap_test httpget gfx_test icon_test
+SRCS_catalog_test        := src/catalog/Catalog.cpp src/catalog/MockCatalog.cpp
+SRCS_core_test           := src/core/DevOptions.cpp
+SRCS_topbar_test         :=
+SRCS_layout_test         :=
+SRCS_http_parse_test     := src/net/HttpParse.cpp src/net/Sinks.cpp src/core/FileUtil.cpp
+SRCS_http_transfer_test  := src/net/HttpTransfer.cpp src/net/HttpParse.cpp src/net/Sinks.cpp src/core/FileUtil.cpp
+SRCS_http_posix_test     := $(NETSRCS)
+# The worker uses SDL threads and mutexes (no SDL_Init), so it links SDL.
+SRCS_worker_test         := src/net/Worker.cpp $(NETSRCS)
+LIBS_worker_test         := $(SDLLIBS)
+# NetSelfTest.cpp references the worker, so those sources are linked too.
+SRCS_nettest_script_test := src/net/NetSelfTest.cpp src/net/Worker.cpp $(NETSRCS)
+LIBS_nettest_script_test := $(SDLLIBS)
+SRCS_oscapi_test         := src/catalog/OscApi.cpp src/catalog/Catalog.cpp
+LIBS_oscapi_test         := $(JANSSONLIBS)
+SRCS_netloader_test      := $(LOADERSRCS)
+LIBS_netloader_test      := $(SDLLIBS) $(JANSSONLIBS)
+SRCS_cache_test          := src/catalog/CatalogCache.cpp src/core/FileUtil.cpp src/catalog/OscApi.cpp src/catalog/Catalog.cpp
+LIBS_cache_test          := $(JANSSONLIBS)
+SRCS_wrap_test           :=
+# Dev tool, built by `make test` but not run (it needs a URL). See the header comment in the file.
+SRCS_httpget             := src/net/Worker.cpp $(NETSRCS)
+LIBS_httpget             := $(SDLLIBS)
+# The one test that draws: the button helpers into a software renderer (no window, no display).
+SRCS_gfx_test            := src/gfx/Gfx.cpp
+LIBS_gfx_test            := $(SDLLIBS) -lm
+# Real icons: PNG validation, the SD icon store, the IconCache against a real worker and a loopback server.
+SRCS_icon_test           := $(ICONSRCS)
+LIBS_icon_test           := $(SDLLIBS) $(shell pkg-config --libs SDL2_image) -lz
 
-test: $(TESTBIN) $(CORETEST) $(TOPBARTEST) $(LAYOUTTEST) $(HTTPPARSETEST) $(HTTPTRANSFERTEST) $(HTTPPOSIXTEST) $(WORKERTEST) $(NETTESTTEST) $(OSCAPITEST) $(NETLOADERTEST) $(CACHETEST) $(WRAPTEST) $(HTTPGET) $(GFXTEST) $(ICONTEST)
-	$(TESTBIN)
-	$(CORETEST)
-	$(TOPBARTEST)
-	$(LAYOUTTEST)
-	$(HTTPPARSETEST)
-	$(HTTPTRANSFERTEST)
-	$(HTTPPOSIXTEST)
-	$(WORKERTEST)
-	$(NETTESTTEST)
-	$(OSCAPITEST)
-	$(NETLOADERTEST)
-	$(CACHETEST)
-	$(WRAPTEST)
-	$(GFXTEST)
-	$(ICONTEST)
+define TESTRULE
+$$(BUILD)/tests/$(1): $$(call tobj,tests/$(1).cpp $$(SRCS_$(1)))
+	@mkdir -p $$(dir $$@)
+	$$(CXX) $$(SANFLAGS) -pthread -o $$@ $$^ $$(LIBS_$(1))
+endef
+$(foreach t,$(TESTS),$(eval $(call TESTRULE,$(t))))
+
+TESTBINS := $(addprefix $(BUILD)/tests/,$(TESTS))
+# httpget is built but not run (it needs a URL).
+RUNTESTS := $(filter-out $(BUILD)/tests/httpget,$(TESTBINS))
+TESTOBJS := $(sort $(foreach t,$(TESTS),$(call tobj,tests/$(t).cpp $(SRCS_$(t)))))
+
+test: $(TESTBINS)
+	@set -e; for t in $(RUNTESTS); do echo "== $$t"; $$t; done
 
 clean:
 	rm -rf $(BUILD)
 
--include $(OBJS:.o=.d)
+-include $(OBJS:.o=.d) $(TESTOBJS:.o=.d)
 .PHONY: clean test

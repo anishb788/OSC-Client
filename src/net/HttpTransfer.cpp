@@ -4,6 +4,7 @@
 #include <cctype>
 
 #include "core/Log.h"
+#include "core/Strings.h"
 
 namespace {
 constexpr size_t kRecvBuf = 8 * 1024;
@@ -136,8 +137,7 @@ HttpTransfer::StepResult HttpTransfer::finish(HttpError err, const std::string& 
 // Extra headers may carry credentials meant for the original host, so only harmless ones follow a cross-host redirect.
 void HttpTransfer::dropForeignHeaders() {
 	auto keep = [](const std::string& name) {
-		std::string n = name;
-		for (char& c : n) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+		const std::string n = strutil::lowerAscii(name);
 		return n == "user-agent" || n == "accept";
 	};
 	req_.headers.erase(std::remove_if(req_.headers.begin(), req_.headers.end(),

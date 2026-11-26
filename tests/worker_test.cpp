@@ -545,11 +545,63 @@ static void testStopRacesTransportCreation() {
 	CHECK(w.pending() == 0);
 }
 
+// M6: queued results are destroyed, not run, on the calling thread by discardResults(), after stop(): their captures
+// must not be left for ~Worker, which in the app runs after SDL_Quit().
+static std::atomic<int> g_probeDtors{0};
+static std::atomic<int> g_probeWrongThread{0};
+static std::thread::id g_probeThread;
+struct DtorProbe {
+	DtorProbe() = default;
+	DtorProbe(const DtorProbe&) {}
+	~DtorProbe() {
+		g_probeDtors++;
+		// Copies die on other threads too (the job's step); only the final destruction of a queued closure matters, which
+		// is checked through the count and thread below.
+		if (std::this_thread::get_id() != g_probeThread) g_probeWrongThread++;
+	}
+};
+
+static void testDiscardResults() {
+	std::atomic<int> ran{0};
+	g_probeThread = std::this_thread::get_id();
+	struct PostJob : Job {
+		std::atomic<int>* ran;
+		explicit PostJob(std::atomic<int>* r) : ran(r) {}
+		JobStep step(JobContext& ctx) override {
+			ctx.post([r = ran] { (*r)++; });
+			return JobStep::Done;
+		}
+	};
+	{
+		Worker w(nullptr, false);
+		CHECK(w.start());
+		w.submit(JobClass::Icon, "p", std::make_unique<PostJob>(&ran));
+		const int64_t end = nowMs() + 5000;
+		while (nowMs() < end && w.pending() > 0) usleep(1000);   // the job ran; its result is queued, undrained
+		CHECK(w.pending() == 0);
+		w.stop();
+		g_probeDtors = 0;
+		g_probeWrongThread = 0;
+		{
+			DtorProbe probe;
+			w.post([&ran, probe] { ran++; });
+		}   // the local probe and the temporary closure copies are gone; one copy lives in the queue
+		const int aliveBefore = g_probeDtors;
+		CHECK(w.discardResults() == 2);        // the job's result and the probe closure
+		CHECK(g_probeDtors == aliveBefore + 1);   // the queued copy was destroyed right here
+		CHECK(g_probeWrongThread == 0);           // on the calling thread
+		CHECK(ran == 0);                          // and never run
+		CHECK(w.discardResults() == 0);
+		CHECK(w.drainResults() == 0);
+	}
+}
+
 int main() {
 	alarm(120);   // a hang kills the run instead of blocking CI
 	testLifecycle();
 	testResultsOnCallerThread();
 	testThrowingClosure();
+	testDiscardResults();
 	testPriority();
 	testBackgroundStarvation();
 	testIconNewestFirstAndDrop();

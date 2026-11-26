@@ -3,6 +3,7 @@
 #include <cctype>
 #include <strings.h>
 
+#include "core/Strings.h"
 #include "core/Version.h"
 
 namespace httpparse {
@@ -14,10 +15,7 @@ constexpr size_t kMaxHeaderBytes = 64 * 1024;
 
 char lower(char c) { return static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }
 
-std::string lowerStr(std::string s) {
-	for (char& c : s) c = lower(c);
-	return s;
-}
+using strutil::lowerAscii;
 
 bool iequals(const std::string& a, const char* b) {
 	size_t i = 0;
@@ -113,7 +111,7 @@ HttpError parseUrl(const std::string& text, Url& out) {
 	for (char c : host)
 		if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '.' || c == '_')) return HttpError::Parse;
 
-	out.host = lowerStr(host);
+	out.host = lowerAscii(host);
 	out.port = port;
 	out.path = path;
 	return HttpError::None;
@@ -270,7 +268,7 @@ bool ResponseParser::onHeader(const std::string& line) {
 		sawLength_ = true;
 		contentLength_ = v;
 	} else if (iequals(name, "Transfer-Encoding")) {
-		std::string v = lowerStr(value);
+		std::string v = lowerAscii(value);
 		if (v == "chunked") chunked_ = true;
 		else if (v != "identity") { fail(HttpError::Parse, "unsupported Transfer-Encoding"); return false; }
 	} else if (iequals(name, "Location")) {

@@ -12,6 +12,8 @@
 #include <set>
 
 #include "core/Log.h"
+#include "core/Strings.h"
+#include "core/Time.h"
 
 namespace oscapi {
 
@@ -198,7 +200,7 @@ bool isMd5(const std::string& s) {
 
 std::string md5Of(const json_t* asset) {
 	std::string h = str(asset, "hash", 64);
-	for (char& c : h) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+	h = strutil::lowerAscii(h);
 	return isMd5(h) ? h : std::string(); // a bad hash is dropped, never half-trusted
 }
 
@@ -227,10 +229,7 @@ bool hasVisibleChar(const std::string& s) {
 	return false;
 }
 
-std::string lowerAscii(std::string s) {
-	for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-	return s;
-}
+using strutil::lowerAscii;
 
 // Subdirectories become install paths later (and the uninstaller deletes them), so only plain absolute paths with
 // FAT-safe segments survive. A trailing slash is rejected rather than stripped: the stored string is then exactly the
@@ -284,9 +283,7 @@ size_t entryBytesOf(const AppEntry& a) {
 	return n;
 }
 
-double msSince(std::chrono::steady_clock::time_point t0) {
-	return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-}
+using timeutil::msSince;
 
 struct KnownCategory {
 	const char *name, *display, *singular, *plural;

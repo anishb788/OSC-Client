@@ -30,8 +30,10 @@
 //   names matching our patterns, never anything else in the directory).
 //
 // THREADING: the cache does blocking SD I/O (a 455 KB read or write takes a noticeable time on a Wii), so it is only
-// ever used from the network worker's Catalog job, never from draw(), which keeps the frame rate up. The worker runs
-// one Catalog job at a time, so two writes never overlap.
+// ever used from the network worker, never from draw(), which keeps the frame rate up. Reads run inside the Catalog job.
+// A write is done in slices (Cache::Writer, one filesystem-heavy stage per step) by a Background job, so icons keep
+// loading between the slices; the loader's rule that a Catalog job finishes any pending write before it reads (NetLoader.cpp)
+// keeps a read from ever overlapping a write. The worker is one thread, so two slices never run at the same time.
 //
 // UNTRUSTED INPUT: the SD card can be edited or corrupted. Every file is read with a size cap, checked against the
 // manifest's size and hash, and the bodies then go through the same OscApi limits as a network response. FNV-1a 64 is
@@ -122,8 +124,10 @@ public:
 	// Reads the bodies of the manifest's generation and checks size and hash. Corrupt unless every listed body matches.
 	Status readBodies(const Meta& meta, Bodies& out) const;
 
-	// Writes a new cache as the next generation (see the invariant above). Empty optional bodies count as absent;
-	// `contents` must be set and not empty. Returns false (logged) if any step failed: the previous cache stays
+	class Writer; // the write in slices, defined below
+
+	// Writes a new cache as the next generation (see the invariant above) in one go. Empty optional bodies count as
+	// absent; `contents` must be set and not empty. Returns false (logged) if any step failed: the previous cache stays
 	// readable. A cleanup that fails afterwards is not an error. `generationOut`, when given, gets the new generation.
 	bool write(const Bodies& bodies, std::string_view baseUrl, std::string_view appVersion, int64_t fetchedAt,
 	           uint32_t* generationOut = nullptr);
@@ -143,6 +147,43 @@ private:
 	void cleanup(const uint32_t* keepGeneration) const;
 	std::string dir_;
 	FileOps ops_;
+};
+
+// The write in slices, so a caller that must stay responsive (the network worker) can yield between them. Same
+// protocol and invariant as Cache::write(). Not thread-safe: one thread drives it. Holds its own copy of the Cache.
+class Cache::Writer {
+public:
+	Writer(const Cache& cache, Bodies&& bodies, std::string_view baseUrl, std::string_view appVersion, int64_t fetchedAt);
+	// Runs the next slice (prepare, one body, the manifest commit, the cleanup). True once the writer is finished:
+	// check ok(). Calling it again after that does nothing.
+	bool step();
+	// Stops before the commit: removes the files of this generation (the old cache stays whole) and finishes with
+	// ok() false. After the commit it only skips the remaining cleanup (harmless leftovers, removed by the next
+	// successful write). Does nothing once finished.
+	void abandon();
+	bool finished() const { return stage_ == Stage::Finished; }
+	bool ok() const { return ok_; }
+	bool committed() const { return committed_; }
+	uint32_t generation() const { return gen_; }
+
+private:
+	enum class Stage { Prepare, Bodies, Commit, Cleanup, Finished };
+	bool prepare();
+	bool writeNextBody();
+	bool commit();
+	void fail();
+	Cache cache_;
+	Bodies bodies_;
+	std::string baseUrl_, appVersion_;
+	int64_t fetchedAt_;
+	Stage stage_ = Stage::Prepare;
+	Meta meta_;
+	uint32_t gen_ = 0;
+	int nextBody_ = 0;
+	size_t total_ = 0;
+	double busyMs_ = 0;
+	bool ok_ = false;
+	bool committed_ = false;
 };
 
 } // namespace catcache

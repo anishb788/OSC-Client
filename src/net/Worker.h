@@ -56,7 +56,9 @@
 //    Poll waits are at most ~50 ms and step budgets ~30 ms, so a stop takes well under a second, except while a job is
 //    inside blocking DNS (getaddrinfo on the PC, where stop() waits it out). On the Wii the lookup runs on a throwaway
 //    thread and Transport::abort(), which stop() calls before joining, makes the worker walk away from it.
-//  - Undelivered results stay queued; drainResults() still works after stop(), and the destructor discards them.
+//  - Undelivered results stay queued; drainResults() still works after stop(). A queued closure may own SDL objects or
+//    other state that must not outlive SDL_Quit(): the owner calls discardResults() right after stop(), while SDL is
+//    still up, because the destructor's own discard would run after SDL_Quit() (App::shutdown does this).
 //  - Once stopped a Worker cannot be restarted and submit() returns 0. Neither does it accept jobs before a successful
 //    start(): callers must treat a 0 from submit() as "this job will never run" and show an error, not wait.
 #include <atomic>
@@ -181,6 +183,9 @@ public:
 
 	// Runs the queued result closures on the calling (main) thread. Returns how many ran.
 	size_t drainResults();
+	// Destroys the queued result closures on the calling thread WITHOUT running them. Call it after stop() and before
+	// SDL_Quit(): a closure's captures are destroyed here, not in ~Worker (see CANCEL AND SHUTDOWN). Returns how many.
+	size_t discardResults();
 	void post(std::function<void()> fn);
 
 private:

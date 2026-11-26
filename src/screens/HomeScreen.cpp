@@ -100,11 +100,20 @@ public:
 		const char* hint = audio::hasMusic() ? platform::musicToggleHint() : "";
 		float hintW = hint[0] ? (float)ui.t.width(Font::Medium, 14, hint) : 0;
 		float left = m + 136, right = hint[0] ? W - m - hintW - 16 : W - m - 136;
-		// Longest credit that fits; the hint (4:3 is the tight case) never gets pushed out.
-		std::string credit = "Catalog provided by the Open Shop Channel / OSC Team";
-		if (ui.t.width(Font::Medium, 14, credit) > right - left) credit = "Catalog provided by the Open Shop Channel";
-		if (ui.t.width(Font::Medium, 14, credit) > right - left) credit = "Catalog: Open Shop Channel";
-		ui.t.drawIn(Font::Medium, 14, credit, {left, by, right - left, 40}, theme::textMuted, Align::Center);
+		// The OSC API guidelines ask clients to credit the Open Shop Channel, the Open Shop Channel Team and Repository
+		// Manager visibly. Home is the screen that is always on show (the loading screen flashes by when the catalog
+		// comes from the SD cache), so all three are named here at every aspect: one line when it fits, otherwise
+		// two smaller lines. The music hint (4:3 is the tight case) never gets pushed out.
+		const float room = right - left;
+		const std::string one = "Catalog by the Open Shop Channel, the OSC Team and Repository Manager";
+		if (ui.t.width(Font::Medium, 14, one) <= room) {
+			ui.t.drawIn(Font::Medium, 14, one, {left, by, room, 40}, theme::textMuted, Align::Center);
+		} else {
+			ui.t.drawIn(Font::Medium, 13, "Catalog by the Open Shop Channel", {left, by + 2, room, 18}, theme::textMuted,
+			            Align::Center);
+			ui.t.drawIn(Font::Medium, 13, "OSC Team · Repository Manager", {left, by + 20, room, 18}, theme::textMuted,
+			            Align::Center);
+		}
 		if (hint[0]) ui.t.drawIn(Font::Medium, 14, hint, {W - m - hintW - 2, by, hintW + 2, 40}, theme::textMuted, Align::Right);
 	}
 

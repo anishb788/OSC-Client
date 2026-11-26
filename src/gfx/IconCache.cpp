@@ -12,6 +12,7 @@
 
 #include "catalog/Catalog.h"
 #include "core/Log.h"
+#include "core/Time.h"
 #include "gfx/IconPng.h"
 #include "gfx/IconStore.h"
 #include "net/Http.h"
@@ -20,7 +21,7 @@
 
 namespace {
 using Clock = std::chrono::steady_clock;
-double msSince(Clock::time_point t) { return std::chrono::duration<double, std::milli>(Clock::now() - t).count(); }
+using timeutil::msSince;
 constexpr const char* kTagPrefix = "icon:";
 }  // namespace
 

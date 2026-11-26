@@ -7,6 +7,8 @@
 #include "catalog/LoadTracker.h"
 #include "catalog/RefreshPolicy.h"
 #include "core/DevOptions.h"
+#include "core/PathRoot.h"
+#include "core/StackProbe.h"
 
 static int failures = 0;
 #define CHECK(cond) \
@@ -256,7 +258,108 @@ static void testLoadTracker() {
 	CHECK(g.generation() == 11);
 }
 
+// heapprobe / stackprobe: off by default, set from devstart or the environment, silent in active() when off.
+static void testProbeOptions() {
+	for (const char* n : {"OPENSHOP_HEAPPROBE", "OPENSHOP_STACKPROBE"}) unsetenv(n);
+	const std::string noDir = "/nonexistent-openshop-dir";
+	DevOptions o = DevOptions::load(noDir);
+	CHECK(!o.heapProbe && !o.stackProbe);
+	CHECK(o.active().find("probe") == std::string::npos && o.describe().find("probe") == std::string::npos);
+	o = parse("heapprobe=1\nstackprobe=1\n");
+	CHECK(o.heapProbe && o.stackProbe);
+	CHECK(o.active() == "heapprobe=1 stackprobe=1");
+	CHECK(o.describe().find("heapprobe=1") != std::string::npos && o.describe().find("stackprobe=1") != std::string::npos);
+	o = parse("heapprobe=0\nstackprobe=off\n");
+	CHECK(!o.heapProbe && !o.stackProbe);
+	setenv("OPENSHOP_HEAPPROBE", "1", 1);
+	setenv("OPENSHOP_STACKPROBE", "0", 1);
+	o = DevOptions::load(noDir);
+	CHECK(o.heapProbe && !o.stackProbe);
+	setenv("OPENSHOP_HEAPPROBE", "", 1); // empty = ignored
+	CHECK(!DevOptions::load(noDir).heapProbe);
+	for (const char* n : {"OPENSHOP_HEAPPROBE", "OPENSHOP_STACKPROBE"}) unsetenv(n);
+}
+
+static void testStackProbe() {
+	unsigned char region[1000];
+	stackprobe::paint(region, sizeof region);
+	CHECK(stackprobe::highWater(region, sizeof region) == 0);
+	// The stack grows down: writes at the top (high addresses) of the region count as shallow use.
+	for (size_t i = 900; i < 1000; i++) region[i] = 0;
+	CHECK(stackprobe::highWater(region, sizeof region) == 100);
+	for (size_t i = 300; i < 350; i++) region[i] = 1;
+	CHECK(stackprobe::highWater(region, sizeof region) == 700); // deepest write at offset 300
+	region[0] = 0;
+	CHECK(stackprobe::highWater(region, sizeof region) == 1000); // the whole region
+	CHECK(stackprobe::highWater(region, 0) == 0);
+}
+
+static void testProbeExclusive() {
+	using PC = DevOptions::ProbeChoice;
+	CHECK(parse("").probeChoice() == PC::None);
+	CHECK(parse("heapprobe=1\n").probeChoice() == PC::Heap);
+	CHECK(parse("stackprobe=1\n").probeChoice() == PC::Stack);
+	CHECK(parse("heapprobe=1\nstackprobe=1\n").probeChoice() == PC::Conflict);
+	CHECK(parse("heapprobe=1\nstackprobe=0\n").probeChoice() == PC::Heap);
+}
+
+static void testRootOf() {
+	// PC-style roots, cwd /home/u/proj: relative and absolute spellings are the same place.
+	const std::vector<std::string> pc = {"./sdcard", "./usbdrive"};
+	const std::string cwd = "/home/u/proj";
+	auto idx = [&](const std::string& p) { return pathroot::indexOf(pc, p, cwd); };
+	CHECK(idx("./sdcard") == 0);
+	CHECK(idx("sdcard") == 0);
+	CHECK(idx("sdcard/") == 0);
+	CHECK(idx("./sdcard/apps/OpenShop") == 0);
+	CHECK(idx("/home/u/proj/sdcard/apps/x") == 0); // absolute path, relative root
+	CHECK(idx("/home/u/proj/./sdcard//apps/") == 0);
+	CHECK(idx("./usbdrive/x") == 1);
+	CHECK(idx("sdcard/apps/../apps/y") == 0);
+	CHECK(idx("sdcard/../x") == -1);               // .. leaves the root
+	CHECK(idx("sdcard/../usbdrive/x") == 1);       // and lands on another one
+	CHECK(idx("./sdcard2") == -1);                 // prefix, not a component
+	CHECK(idx("./sdcard2/apps") == -1);
+	CHECK(idx("/home/u/proj/sdcard2") == -1);
+	CHECK(idx("/elsewhere/sdcard") == -1);
+	CHECK(idx("") == -1);
+	CHECK(idx(".") == -1);                          // the cwd itself is above the roots
+	CHECK(idx("/") == -1);
+	// An absolute root (OPENSHOP_SD=/data/sd) against relative and absolute paths.
+	const std::vector<std::string> absr = {"/data/sd"};
+	CHECK(pathroot::indexOf(absr, "/data/sd/apps", "/home/u/proj") == 0);
+	CHECK(pathroot::indexOf(absr, "/data/sd/", "/home/u/proj") == 0);
+	CHECK(pathroot::indexOf(absr, "/data/sdx", "/home/u/proj") == -1);
+	CHECK(pathroot::indexOf(absr, "/data/sd/../x", "/home/u/proj") == -1);
+	CHECK(pathroot::indexOf(absr, "data/sd", "/home/u/proj") == -1); // relative to the cwd, a different place
+	CHECK(pathroot::indexOf(absr, "data/sd", "/") == 0);
+	// Roots can't be empty.
+	CHECK(pathroot::indexOf(std::vector<std::string>{""}, "x", cwd) == -1);
+	// Wii style: devices, no cwd. "sd:foo" is deliberately on "sd:".
+	const std::vector<std::string> wii = {"sd:", "usb:"};
+	auto w = [&](const std::string& p) { return pathroot::indexOf(wii, p, ""); };
+	CHECK(w("sd:/apps/x") == 0);
+	CHECK(w("sd:/") == 0);
+	CHECK(w("sd:") == 0);
+	CHECK(w("sd:foo") == 0);
+	CHECK(w("usb:/x") == 1);
+	CHECK(w("usb:/x/../../y") == 1);  // .. never climbs above the device root
+	CHECK(w("usb2:/x") == -1);
+	CHECK(w("sdx:/x") == -1);
+	CHECK(w("/apps/x") == -1);
+	CHECK(w("apps/x") == -1);
+	CHECK(w("") == -1);
+	// Longest root wins when roots nest.
+	const std::vector<std::string> nest = {"./a", "./a/b"};
+	CHECK(pathroot::indexOf(nest, "a/b/c", cwd) == 1);
+	CHECK(pathroot::indexOf(nest, "a/c", cwd) == 0);
+}
+
 int main() {
+	testProbeExclusive();
+	testRootOf();
+	testProbeOptions();
+	testStackProbe();
 	testDevOptions();
 	testNetTestEnv();
 	testInstallGuard();

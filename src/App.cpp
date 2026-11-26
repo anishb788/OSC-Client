@@ -57,6 +57,14 @@ bool App::init(int argc, char** argv) {
 	LOG("OpenShop %s, User-Agent: %s", OPENSHOP_VERSION, userAgent());
 	LOG("libzip %s", zip_libzip_version()); // proves the archive library is linked (M3 installs use it)
 	LOG("Dev options: %s", opts.describe().c_str());
+	switch (opts.probeChoice()) { // one probe per launch
+		case DevOptions::ProbeChoice::Heap: platform::heapProbe(); break;
+		case DevOptions::ProbeChoice::Stack: platform::stackProbe(); break;
+		case DevOptions::ProbeChoice::Conflict:
+			LOG("probe: heapprobe and stackprobe were both requested; they disturb each other, so NEITHER runs. Ask for one.");
+			break;
+		case DevOptions::ProbeChoice::None: break;
+	}
 	// A release must not behave differently because of a stray devstart file or environment variable, so say so loudly.
 	// (Compile-time gating of these hooks is a later item; this is only the warning.)
 	if (const std::string active = opts.active(); !active.empty())
@@ -365,6 +373,7 @@ void App::run() {
 				LOG("perf: frame %.2f ms (worst %.1f), draw %.2f ms, present %.2f ms, masks created %d (%d frames); icons %zu textures %zu KB, text %zu textures %zu KB",
 				    perfFrame / 120, perfMax, perfCpu / 120, perfPresent / 120, gfx.masksCreated(), perfFrames, is.textures,
 				    is.textureBytes / 1024, text.cacheCount(), text.cacheBytes() / 1024);
+				LOG("perf: %s", platform::heapSummary().c_str());
 				perfCpu = perfPresent = perfFrame = perfMax = 0;
 				perfFrames = 0;
 			}

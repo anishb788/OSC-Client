@@ -74,6 +74,8 @@ void DevOptions::parseFile(const std::string& text, DevOptions& o) {
 		else if (key == "icons") o.iconBase = cleanApiBase(val);
 		else if (key == "topbar") o.topbarAll = val == "all";
 		else if (key == "perf") o.perf = truthy(val);
+		else if (key == "heapprobe") o.heapProbe = truthy(val);
+		else if (key == "stackprobe") o.stackProbe = truthy(val);
 		else if (key == "nettest") o.nettest = val;
 		else if (key == "nettestbg") o.nettestBg = val;
 		else if (key == "nettestquit") o.nettestQuit = truthy(val);
@@ -97,6 +99,8 @@ DevOptions DevOptions::load(const std::string& dataDir) {
 	if (const char* v = std::getenv("OPENSHOP_ICONS"); v && *v) o.iconBase = cleanApiBase(v);
 	if (const char* v = std::getenv("OPENSHOP_TOPBAR"); v && *v) o.topbarAll = std::string(v) == "all";
 	if (const char* v = std::getenv("OPENSHOP_PERF"); v && *v) o.perf = truthy(v);
+	if (const char* v = std::getenv("OPENSHOP_HEAPPROBE"); v && *v) o.heapProbe = truthy(v);
+	if (const char* v = std::getenv("OPENSHOP_STACKPROBE"); v && *v) o.stackProbe = truthy(v);
 	if (const char* v = std::getenv("OPENSHOP_NETTEST"); v && *v) o.nettest = v;
 	if (const char* v = std::getenv("OPENSHOP_NETTESTBG"); v && *v) o.nettestBg = v;
 	if (const char* v = std::getenv("OPENSHOP_NETTESTQUIT"); v && *v) o.nettestQuit = truthy(v);
@@ -113,6 +117,7 @@ std::string DevOptions::describe() const {
 	       (apiBase.empty() ? std::string() : " api=" + apiBase) +
 	       (iconBase.empty() ? std::string() : " icons=" + iconBase) +
 	       (autoRefreshMs < 0 ? std::string() : " autorefresh=" + std::to_string(autoRefreshMs)) +
+	       (heapProbe ? std::string(" heapprobe=1") : std::string()) + (stackProbe ? std::string(" stackprobe=1") : std::string()) +
 	       (nettest.empty() && nettestBg.empty() ? std::string() : " nettest=" + nettest + " nettestbg=" + nettestBg + " nettestquit=" + (nettestQuit ? "1" : "0"));
 }
 
@@ -133,6 +138,8 @@ std::string DevOptions::active() const {
 	if (!iconBase.empty()) add("icons=" + iconBase);
 	if (autoRefreshMs >= 0) add("autorefresh=" + std::to_string(autoRefreshMs));
 	if (perf) add("perf=1");
+	if (heapProbe) add("heapprobe=1");
+	if (stackProbe) add("stackprobe=1");
 	if (!nettest.empty() || !nettestBg.empty() || nettestQuit) add("nettest=" + nettest + " nettestbg=" + nettestBg);
 	return out;
 }

@@ -5,11 +5,11 @@
 //
 // Sources, highest priority first:
 //   1. Environment (PC build, set by `./dev`): OPENSHOP_START, OPENSHOP_MOCK, OPENSHOP_OFFLINE,
-//      OPENSHOP_REFRESH, OPENSHOP_FAIL, OPENSHOP_TOPBAR, OPENSHOP_MOCKDELAY, OPENSHOP_RATELIMIT, OPENSHOP_CACHETTL, OPENSHOP_API, OPENSHOP_ICONS, OPENSHOP_AUTOREFRESH, OPENSHOP_PERF, OPENSHOP_NETTEST, OPENSHOP_NETTESTBG, OPENSHOP_NETTESTQUIT. An empty variable is ignored. On/off flags
+//      OPENSHOP_REFRESH, OPENSHOP_FAIL, OPENSHOP_TOPBAR, OPENSHOP_MOCKDELAY, OPENSHOP_RATELIMIT, OPENSHOP_CACHETTL, OPENSHOP_API, OPENSHOP_ICONS, OPENSHOP_AUTOREFRESH, OPENSHOP_PERF, OPENSHOP_HEAPPROBE, OPENSHOP_STACKPROBE, OPENSHOP_NETTEST, OPENSHOP_NETTESTBG, OPENSHOP_NETTESTQUIT. An empty variable is ignored. On/off flags
 //      (mock, offline, refresh) are on unless the value is "0", "false", "no" or "off"; fail, topbar, mockdelay
 //      and ratelimit take the values described next to their fields.
 //   2. <dataDir>/devstart (Wii, written by `./dev`; env vars don't reach Dolphin): one key=value
-//      per line with keys screen, mock, offline, refresh, fail, topbar, mockdelay, ratelimit, cachettl, api, icons, autorefresh, perf, nettest, nettestbg, nettestquit. A line without '=' is a bare screen name
+//      per line with keys screen, mock, offline, refresh, fail, topbar, mockdelay, ratelimit, cachettl, api, icons, autorefresh, perf, heapprobe, stackprobe, nettest, nettestbg, nettestquit. A line without '=' is a bare screen name
 //      (the old one-line format).
 struct DevOptions {
 	std::string screen; // "" = normal start
@@ -49,6 +49,21 @@ struct DevOptions {
 	// perf=1: log the average CPU draw time, present (vsync) time and frame time every 120 frames, plus the number of
 	// textures Gfx has created so far (it must stay flat once a screen has been drawn).
 	bool perf = false;
+
+	// heapprobe=1: once at startup, allocate 1 MB blocks until malloc fails (capped at 80 MB), log the MEM1 / MEM2 split, the
+	// MEM1->MEM2 gap and sbrk before / peak / after, then free everything (platform::heapProbe). Does nothing unless set.
+	bool heapProbe = false;
+
+	// stackprobe=1: once at startup, run a short-lived 64 KB-stack SDL thread that logs the stack bounds (assumed on the Wii), its
+	// painted-stack high-water and what SDL_SetThreadPriority does (platform::stackProbe). Does nothing unless set.
+	bool stackProbe = false;
+
+	// One probe per launch: the two disturb each other's numbers (and the heap probe fills the whole heap), so asking for
+	// both runs NEITHER and App logs why.
+	enum class ProbeChoice { None, Heap, Stack, Conflict };
+	ProbeChoice probeChoice() const {
+		return heapProbe && stackProbe ? ProbeChoice::Conflict : heapProbe ? ProbeChoice::Heap : stackProbe ? ProbeChoice::Stack : ProbeChoice::None;
+	}
 
 	// nettest=<script>, nettestbg=<url>, nettestquit=1: the Increment 7 network self-test (net/NetSelfTest.h). Off (empty)
 	// by default; it never changes the UI.

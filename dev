@@ -336,6 +336,9 @@ package() {
 	cp "$TARGET.dol" "$stage/boot.dol"
 	install_meta "$stage/meta.xml"
 	[[ -f hbc/icon.png ]] && cp hbc/icon.png "$stage/"
+	# Licence texts the statically linked libraries and the bundled font require us to pass on.
+	cp THIRD_PARTY_NOTICES.txt "$stage/"
+	cp assets/fonts/OFL.txt "$stage/OFL.txt"
 	rm -f "dist/$TARGET.zip"
 	(cd build/package && python3 -m zipfile -c "$ROOT/dist/$TARGET.zip" apps)
 	ok "dist/$TARGET.zip (extract to SD card root)"

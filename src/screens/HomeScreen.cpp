@@ -100,7 +100,9 @@ public:
 		const char* hint = audio::hasMusic() ? platform::musicToggleHint() : "";
 		float hintW = hint[0] ? (float)ui.t.width(Font::Medium, 14, hint) : 0;
 		float left = m + 136, right = hint[0] ? W - m - hintW - 16 : W - m - 136;
-		std::string credit = "Catalog provided by the Open Shop Channel";
+		// Longest credit that fits; the hint (4:3 is the tight case) never gets pushed out.
+		std::string credit = "Catalog provided by the Open Shop Channel / OSC Team";
+		if (ui.t.width(Font::Medium, 14, credit) > right - left) credit = "Catalog provided by the Open Shop Channel";
 		if (ui.t.width(Font::Medium, 14, credit) > right - left) credit = "Catalog: Open Shop Channel";
 		ui.t.drawIn(Font::Medium, 14, credit, {left, by, right - left, 40}, theme::textMuted, Align::Center);
 		if (hint[0]) ui.t.drawIn(Font::Medium, 14, hint, {W - m - hintW - 2, by, hintW + 2, 40}, theme::textMuted, Align::Right);

@@ -6,7 +6,6 @@
 #include <set>
 
 #include <SDL_image.h>
-#include <jansson.h>
 
 #include "audio/Audio.h"
 #include "catalog/InstallGuard.h"
@@ -17,19 +16,6 @@
 #include "net/HttpWii.h"
 #include "platform/Platform.h"
 #include "ui/Widgets.h"
-
-// Startup probe: <dataDir>/lastrun.txt holds the run count and a timestamp. It proves SD writes
-// from inside the app persist (including through Dolphin's synced virtual SD). Never fatal.
-static void writeLastRunProbe() {
-	const std::string path = platform::dataDir() + "/lastrun.txt";
-	std::string old;
-	int count = 0;
-	if (platform::readFile(path, old)) std::sscanf(old.c_str(), "%d", &count);
-	count++;
-	char buf[96];
-	std::snprintf(buf, sizeof buf, "%d\n%lld\n", count, (long long)std::time(nullptr));
-	if (platform::writeFile(path, buf)) LOG("lastrun probe: run #%d written to %s", count, path.c_str());
-}
 
 bool App::init(int argc, char** argv) {
 	if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_TIMER) != 0) {
@@ -48,7 +34,6 @@ bool App::init(int argc, char** argv) {
 	gfx.prewarmCircles(40);
 	if (!text.init(gfx.renderer(), gfx.scaleX())) return false;
 	audio::init(platform::dataDir());
-	writeLastRunProbe();
 
 	opts = DevOptions::load(platform::dataDir());
 	// The app stays usable without it, but submit() then returns 0 and nothing network-related can run.
@@ -69,9 +54,8 @@ bool App::init(int argc, char** argv) {
 	}
 	LOG("OpenShop %s, User-Agent: %s", OPENSHOP_VERSION, userAgent());
 	LOG("Dev options: %s", opts.describe().c_str());
-	LOG("jansson %s", JANSSON_VERSION);
-	if (IMG_Init(IMG_INIT_PNG) & IMG_INIT_PNG) LOG("SDL2_image: PNG support initialised");
-	else LOG("SDL2_image: IMG_Init(PNG) failed: %s", IMG_GetError());
+	// Only the failure is logged: a normal launch writes nothing to the SD card but the catalog and icon caches.
+	if (!(IMG_Init(IMG_INIT_PNG) & IMG_INIT_PNG)) LOG("SDL2_image: IMG_Init(PNG) failed: %s", IMG_GetError());
 
 	LoaderOptions startup = LoaderOptions::from(opts);
 	startup.worker = &worker_;

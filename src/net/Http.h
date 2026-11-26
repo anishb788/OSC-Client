@@ -1,6 +1,20 @@
 #pragma once
 // Platform-neutral HTTP types shared by M2 (catalog, icons) and M3 (archive downloads). No sockets, no SDL, no
 // libogc: the transports live behind Transport.h (Increment 5a) and the wire format in HttpParse.h.
+//
+// M3 HAND-OFF (archive downloads). Everything M3 needs from M2 is already here; read these in this order:
+//  - Streaming: subclass HttpSink (below). onData() gets the body in slices, so a download goes straight to the SD card
+//    through a sink (MemorySink and FileSink below; FileSink writes a .tmp and renames it) and never sits in RAM.
+//    Set HttpRequest::maxBody and totalTimeoutMs for catalog-style fetches; a long archive may leave totalTimeoutMs 0.
+//  - Progress and cancel: ProgressFn and CancelFlag below; Worker::progress(id) and Worker::cancel(id) (Worker.h).
+//  - Threads: ONE cooperative network worker (Worker.h RULES, HttpTransfer.h DECISION). M3 submits its downloads to it
+//    as Background jobs. No second network thread and no netMutex.
+//  - Catalog pointers: background work never holds `const AppEntry*` or the Catalog; copy slug, URLs, sizes and the MD5
+//    when the job is enqueued and look the app up again with catalog.find(slug) when the job reports back.
+//  - Catalog replacement: App::installCatalog() accepts a new catalog only while the LoadingScreen recorded for the
+//    load is the only screen (startup and Refresh); App::catalogGeneration() changes on every accepted install (App.h).
+//  - Top bar: replace App::openDownloads() and App::openMyApps() (M4 replaces openSettings()); the capsules, badge and
+//    progress strip already exist behind the `topbar=all` dev option.
 #include <atomic>
 #include <cstddef>
 #include <cstdint>

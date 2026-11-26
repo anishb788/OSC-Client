@@ -125,6 +125,11 @@ static void testRequest() {
 	CHECK(s.find("X-Test: 1\r\n") != std::string::npos);
 	CHECK(s.find("Evil") == std::string::npos && s.find("Bad") == std::string::npos);
 	CHECK(s.size() > 4 && s.substr(s.size() - 4) == "\r\n\r\n");
+	// A caller's Accept replaces the default one (case-insensitively), so the request never carries two.
+	HttpRequest withAccept;
+	withAccept.headers = {{"accept", "application/json"}};
+	std::string a = buildRequest(u, withAccept);
+	CHECK(a.find("Accept: */*") == std::string::npos && a.find("accept: application/json\r\n") != std::string::npos);
 	parseUrl("http://host/", u);
 	CHECK(buildRequest(u, HttpRequest{}).find("Host: host\r\n") != std::string::npos);
 }

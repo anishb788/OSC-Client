@@ -1,6 +1,7 @@
 #include "net/HttpParse.h"
 
 #include <cctype>
+#include <strings.h>
 
 #include "core/Version.h"
 
@@ -184,7 +185,12 @@ std::string buildRequest(const Url& url, const HttpRequest& req) {
 	std::string s = "GET " + url.path + " HTTP/1.1\r\n";
 	s += "Host: " + url.host + (url.port != 80 ? ":" + std::to_string(url.port) : "") + "\r\n";
 	s += std::string("User-Agent: ") + userAgent() + "\r\n";
-	s += "Accept: */*\r\n";
+	// A caller's own Accept (the catalog asks for JSON, icons for PNG) replaces the default instead of doubling it.
+	bool ownAccept = false;
+	for (const auto& h : req.headers) {
+		if (h.first.size() == 6 && strncasecmp(h.first.c_str(), "accept", 6) == 0) ownAccept = true;
+	}
+	if (!ownAccept) s += "Accept: */*\r\n";
 	s += "Accept-Encoding: identity\r\n";
 	s += "Connection: close\r\n";
 	for (const auto& h : req.headers) {

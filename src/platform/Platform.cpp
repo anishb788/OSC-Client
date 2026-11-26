@@ -4,7 +4,6 @@
 
 #include <dirent.h>
 #include <malloc.h>
-#include <sys/statvfs.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -13,6 +12,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <optional>
 #include <vector>
 
 #include "core/FileUtil.h"
@@ -136,11 +136,10 @@ bool probeWritable(const std::string& root) {
 	return ok;
 }
 
-// Free space in MB, -1 if unknown. STUB until Increment 2a's FileUtil freeSpace replaces it.
-long long stubFreeMB(const std::string& root) {
-	struct statvfs sv;
-	if (statvfs((root + "/").c_str(), &sv) != 0) return -1;
-	return (long long)((unsigned long long)sv.f_bavail * sv.f_frsize / (1024ull * 1024ull));
+// Free space in MB, -1 if unknown.
+long long rootFreeMB(const std::string& root) {
+	const std::optional<uint64_t> b = freeSpace(root);
+	return b ? (long long)(*b / (1024ull * 1024ull)) : -1;
 }
 
 // The roots with their current state. Wii: sd and usb, always both. PC: sd, and usb only if its folder exists.
@@ -171,7 +170,7 @@ void logRoots(const char* when, const std::vector<StorageRoot>& roots, std::map<
 			auto it = freeMB.find(s.id);
 			if (it == freeMB.end()) {
 				const uint32_t t0 = SDL_GetTicks();
-				mb = stubFreeMB(s.root);
+				mb = rootFreeMB(s.root);
 				freeMB[s.id] = mb;
 				LOG("storage: statvfs(%s) took %u ms", s.root.c_str(), (unsigned)(SDL_GetTicks() - t0));
 			} else {
@@ -349,6 +348,12 @@ int stackProbeThread(void* arg) {
 } // namespace
 
 const std::vector<StorageRoot>& storageRoots() { return gRoots; }
+
+RemoveResult removeTree(const std::string& path, const std::string& mustBeUnder) {
+	std::vector<std::string> roots;
+	for (const StorageRoot& s : gRoots) roots.push_back(s.root);
+	return ::removeTree(path, mustBeUnder, roots);
+}
 
 std::string rootOf(const std::string& path) {
 	std::vector<std::string> roots;

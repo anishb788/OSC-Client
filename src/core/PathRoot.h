@@ -68,13 +68,26 @@ inline Parts parse(const std::string& path, const std::string& cwd) {
 	return p;
 }
 
-// Does `path` lie on (or equal) `root`?
-inline bool under(const Parts& root, const Parts& path) {
-	if (root.empty || path.empty || root.device != path.device) return false;
+// ASCII case-insensitive equality (FAT names are case-insensitive).
+inline bool equalsNoCase(const std::string& a, const std::string& b) {
+	if (a.size() != b.size()) return false;
+	for (size_t i = 0; i < a.size(); i++) {
+		char x = a[i], y = b[i];
+		if (x >= 'A' && x <= 'Z') x = (char)(x - 'A' + 'a');
+		if (y >= 'A' && y <= 'Z') y = (char)(y - 'A' + 'a');
+		if (x != y) return false;
+	}
+	return true;
+}
+
+// Does `path` lie on (or equal) `root`? `icase` compares the device and the components ignoring ASCII case.
+inline bool under(const Parts& root, const Parts& path, bool icase = false) {
+	auto same = [icase](const std::string& a, const std::string& b) { return icase ? equalsNoCase(a, b) : a == b; };
+	if (root.empty || path.empty || !same(root.device, path.device)) return false;
 	if (root.device.empty() && root.absolute != path.absolute) return false;
 	if (root.comps.size() > path.comps.size()) return false;
 	for (size_t i = 0; i < root.comps.size(); i++)
-		if (root.comps[i] != path.comps[i]) return false;
+		if (!same(root.comps[i], path.comps[i])) return false;
 	return true;
 }
 

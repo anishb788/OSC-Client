@@ -98,7 +98,7 @@ $(BUILD)/tobj/%.o: %.c $(STAMP)
 
 # name -> sources (tests/<name>.cpp is added automatically) and extra link libraries.
 TESTS := catalog_test core_test topbar_test layout_test http_parse_test http_transfer_test http_posix_test worker_test \
-         nettest_script_test oscapi_test netloader_test cache_test wrap_test httpget gfx_test icon_test install_test
+         nettest_script_test oscapi_test netloader_test cache_test wrap_test httpget gfx_test icon_test install_test fileutil_test
 SRCS_catalog_test        := src/catalog/Catalog.cpp src/catalog/ArchiveUrl.cpp src/catalog/MockCatalog.cpp
 SRCS_core_test           := src/core/DevOptions.cpp
 SRCS_topbar_test         :=
@@ -132,6 +132,7 @@ LIBS_icon_test           := $(SDLLIBS) $(shell pkg-config --libs SDL2_image) -lz
 # M3: the pure install modules. MD5 is the vendored C file; libzip is linked from Increment 1 (zip_libzip_version).
 SRCS_install_test        := src/third_party/md5/md5.c
 LIBS_install_test        := $(shell pkg-config --libs libzip)
+SRCS_fileutil_test       := src/core/FileUtil.cpp
 
 define TESTRULE
 $$(BUILD)/tests/$(1): $$(call tobj,tests/$(1).cpp $$(SRCS_$(1)))

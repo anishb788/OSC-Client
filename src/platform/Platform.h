@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 
+#include "core/FileUtil.h"
 #include "core/Input.h"
 
 namespace platform {
@@ -25,6 +26,9 @@ const std::vector<StorageRoot>& storageRoots();
 // slashes resolved lexically, relative and absolute PC paths compared as absolute (rules in core/PathRoot.h).
 // "sd:foo" counts as on "sd:" on purpose.
 std::string rootOf(const std::string& path);
+// FileUtil's removeTree with the roots taken from storageRoots(), so a caller cannot hand it a bad roots vector. Same
+// guards and result (see core/FileUtil.h).
+RemoveResult removeTree(const std::string& path, const std::string& mustBeUnder);
 // One line for the perf=1 log, every 120 frames: malloc arena, bytes in use and their high-water, and where the free
 // heap is (Wii: MEM1 and MEM2 arenas, with the MEM1->MEM2 address gap taken out; PC: the process RSS).
 std::string heapSummary();

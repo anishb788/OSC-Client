@@ -29,6 +29,18 @@ std::string featuredUrl();
 // http://hbb1.oscwii.org/api/contents/<slug>/icon.png. The slug must already pass isValidSlug.
 std::string iconUrl(std::string_view slug);
 
+// Rebuilds an archive URL from the API's. Accepts http or https input, host exactly hbb1.oscwii.org (any case), no
+// userinfo, no non-default port, no query or fragment, and a path of exactly /api/contents/<slug>/<file> with <slug>
+// equal to `slug`. <file> is 1-128 bytes of [A-Za-z0-9._-], no leading dot, ends in .zip, is not a device name.
+// The result is always kContentsUrl + "/" + slug + "/" + file (plain http); empty on any reject. (ArchiveUrl.cpp)
+std::string rebuildArchiveUrl(std::string_view slug, std::string_view apiUrl);
+// The same predicate on an already-rebuilt URL: exact kContentsUrl prefix, one slug segment, one file segment.
+bool isAllowedDownloadUrl(std::string_view url);
+#if defined(OPENSHOP_DEVHOOKS) && OPENSHOP_DEVHOOKS
+// Dev builds only: also allow archives under this contents base (the local test server).
+void allowDevDownloadBase(std::string_view contentsBase);
+#endif
+
 // Hard bounds. Bodies above these limits are refused before jansson sees them. The live contents body is 455 KB
 // (303 apps), so 2 MB is 4x headroom; the old 8 MB limit let a hostile `[{},{},...]` body make jansson peak at
 // 645 MB, and the Wii has ~88 MB. Increment 9 must cap the HTTP read at the same limits (MemorySink maxBody), so an

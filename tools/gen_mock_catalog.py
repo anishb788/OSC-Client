@@ -39,6 +39,12 @@ CATEGORIES = [("games", "Games", "Game", "Games"), ("emulators", "Emulators", "E
               ("demos", "Demos", "Demo", "Demos")]
 PACKAGE = {"dol": "PackageType::Dol", "elf": "PackageType::Elf"}
 
+def rebuilt_archive_url(a):
+    """The form OscApi's rebuildArchiveUrl produces: plain http, host and path fixed, the slug's own file name."""
+    url = asset(a, "archive", "url", "")
+    name = url.rsplit("/", 1)[-1]
+    return "http://hbb1.oscwii.org/api/contents/%s/%s" % (a["slug"], name) if name else ""
+
 def asset(a, kind, key, default):
     return (a["assets"].get(kind) or {}).get(key, default)
 
@@ -61,7 +67,7 @@ for a in picked:
         ("longDesc", lit(longd)), ("version", lit(a["version"])),
         ("authors", strs(a.get("authors", []))), ("contributors", strs(a.get("contributors", []))),
         ("iconUrl", lit(asset(a, "icon", "url", ""))),
-        ("archiveUrl", lit(asset(a, "archive", "url", ""))), ("archiveMd5", lit(asset(a, "archive", "hash", ""))),
+        ("archiveUrl", lit(rebuilt_archive_url(a))), ("archiveMd5", lit(asset(a, "archive", "hash", ""))),
         ("binaryUrl", lit(asset(a, "binary", "url", ""))), ("binaryMd5", lit(asset(a, "binary", "hash", ""))),
         ("metaUrl", lit(asset(a, "meta", "url", ""))),
         ("iconSize", "%dull" % asset(a, "icon", "size", 0)),

@@ -253,9 +253,9 @@ bool safeSubdir(const std::string& p) {
 	return true;
 }
 
-// An asset URL: http(s) only (never file:, ftp:, javascript: or a bare path), and never clipped. Anything else is
-// blanked with a warning, so the entry stays but that download is unavailable. Restricting the host to the OSC
-// server was considered; every URL in the real data is on it, but the CDN may move, so the scheme is the only rule.
+// An asset URL (binary and meta; archives go through rebuildArchiveUrl): http(s) only (never file:, ftp:,
+// javascript: or a bare path), and never clipped. Anything else is blanked with a warning, so the entry stays but
+// that download is unavailable.
 std::string urlOf(const json_t* asset, const std::string& slug, const char* what, ApiStats* stats) {
 	bool tooLong = false;
 	std::string u = strExact(asset, "url", kMaxShortText, &tooLong);
@@ -268,6 +268,20 @@ std::string urlOf(const json_t* asset, const std::string& slug, const char* what
 		return std::string();
 	}
 	return u;
+}
+
+// The archive URL is rebuilt, never copied: only the OSC host, plain http, one validated file name.
+std::string archiveUrlOf(const json_t* archive, const std::string& slug, ApiStats* stats) {
+	bool tooLong = false;
+	std::string u = strExact(archive, "url", kMaxShortText, &tooLong);
+	if (tooLong) {
+		warn(stats, "'%s': dropped over-long %s URL", slug, "archive");
+		return std::string();
+	}
+	if (u.empty()) return u;
+	std::string rebuilt = rebuildArchiveUrl(slug, u);
+	if (rebuilt.empty()) warn(stats, "'%s': dropped %s URL that is not an OSC archive", slug, "archive");
+	return rebuilt;
 }
 
 size_t entryBytesOf(const AppEntry& a) {
@@ -353,7 +367,7 @@ ApiError parseContents(std::string_view json, Catalog& c, ApiStats* stats) {
 	}
 
 	std::set<std::string> seenSlugs; // lowercase: the SD card is case-insensitive, so "Foo" and "foo" would collide
-	size_t kept = 0, skipped = 0, entryBytes = 0;
+	size_t kept = 0, skipped = 0, entryBytes = 0, smaller = 0;
 	size_t total = json_array_size(root.get());
 	std::vector<AppEntry> apps;
 	apps.reserve(std::min(total, kMaxApps));
@@ -406,7 +420,7 @@ ApiError parseContents(std::string_view json, Catalog& c, ApiStats* stats) {
 		// Icons always come from the plain-HTTP pattern (the API's own icon URL is https, which the Wii cannot do).
 		if (json_is_object(icon)) a.iconUrl = iconUrl(a.slug);
 		a.iconSize = num(icon, "size", UINT64_C(1) << 40);
-		a.archiveUrl = urlOf(archive, a.slug, "archive", stats);
+		a.archiveUrl = archiveUrlOf(archive, a.slug, stats);
 		a.archiveMd5 = md5Of(archive);
 		a.archiveSize = num(archive, "size", UINT64_C(1) << 40);
 		a.binaryUrl = urlOf(binary, a.slug, "binary", stats);
@@ -435,11 +449,13 @@ ApiError parseContents(std::string_view json, Catalog& c, ApiStats* stats) {
 			else warn(stats, "'%s': dropped unsafe subdirectory '%s'", a.slug, s);
 		}
 		if (overlong) warn(stats, "'%s': dropped over-long subdirectories (%s)", a.slug, std::to_string(overlong));
+		if (a.uncompressedSize > 0 && a.archiveSize > 0 && a.uncompressedSize < a.archiveSize) smaller++;
 		entryBytes += entryBytesOf(a);
 		apps.push_back(std::move(a));
 		kept++;
 	}
 	root.reset(); // the tree is no longer needed; free it before anything else allocates
+	if (smaller > 0) LOG("oscapi: %zu apps have an uncompressed size below the archive size (allowed)", smaller);
 
 	if (kept == 0) return fail(ApiErrorCode::NoApps, "The shop's app list had no usable apps.");
 	for (auto& a : apps) c.apps.push_back(std::move(a));

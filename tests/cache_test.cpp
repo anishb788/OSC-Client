@@ -201,6 +201,25 @@ static void testRoundTrip() {
 	CHECK(!bad.write(b, kBase, kApp, 1));
 }
 
+// M3 1a: the cache stores the raw API bodies (https archive URLs), so re-parsing them gives the rebuilt http URLs.
+static void testCachedCatalogRebuildsUrls() {
+	std::string contents = slurp("tests/fixtures/contents.json");
+	CHECK(!contents.empty() && contents.find("https://hbb1.oscwii.org/api/contents/") != std::string::npos);
+	TempDir t;
+	Cache c(t.sub("cache"));
+	Bodies b;
+	b.contents = contents;
+	CHECK(c.write(b, kBase, kApp, 1000));
+	Meta m;
+	Bodies r;
+	CHECK(c.readMeta(m) == Cache::Status::Ok && c.readBodies(m, r) == Cache::Status::Ok && r.contents);
+	oscapi::BuildResult br = oscapi::buildCatalog(std::nullopt, r.contents ? *r.contents : std::string(), std::nullopt);
+	CHECK(br.ok() && br.catalog.apps.size() > 300);
+	for (const auto& a : br.catalog.apps) {
+		CHECK(a.archiveUrl == "http://hbb1.oscwii.org/api/contents/" + a.slug + "/" + a.slug + ".zip" && a.installable());
+	}
+}
+
 // M1: an empty optional body is treated as absent (a size-0 entry would make the manifest unparseable).
 static void testEmptyOptionalBodies() {
 	TempDir t;
@@ -687,6 +706,7 @@ int main() {
 	testHash();
 	testRoundTrip();
 	testEmptyOptionalBodies();
+	testCachedCatalogRebuildsUrls();
 	testCorruption();
 	testManifestBakFallback();
 	testReadErrors();

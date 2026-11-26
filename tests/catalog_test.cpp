@@ -77,31 +77,60 @@ static void testSlug() {
 	CHECK(isReservedDeviceName("com1 .txt") && !isReservedDeviceName("com1x"));
 }
 
+static AppEntry installableApp() {
+	AppEntry a;
+	a.slug = "x";
+	a.archiveUrl = "http://hbb1.oscwii.org/api/contents/x/x.zip";
+	a.archiveMd5 = "0123456789abcdef0123456789ABCDEF";
+	a.packageType = PackageType::Dol;
+	a.archiveSize = 1000;
+	a.uncompressedSize = 2000;
+	a.subdirectories = {"/apps/x"};
+	return a;
+}
+
 static void testInstallable() {
 	AppEntry a;
-	CHECK(!a.installable());
-	a.archiveUrl = "http://example.org/a.zip";
-	CHECK(!a.installable()); // no MD5: refuse
-	a.archiveMd5 = "0123456789abcdef0123456789ABCDEF";
+	CHECK(!a.installable() && a.installRefusal() == InstallRefusal::NoArchiveUrl);
+	a = installableApp();
+	CHECK(a.installable() && a.installRefusal() == InstallRefusal::None);
+	a.uncompressedSize = 500; // smaller than the archive: allowed
 	CHECK(a.installable());
-	a.archiveUrl = "https://example.org/a.zip";
-	CHECK(a.installable());
-	a.archiveUrl = "ftp://example.org/a.zip";
-	CHECK(!a.installable());
-	a.archiveUrl = "file:///etc/passwd";
-	CHECK(!a.installable());
-	a.archiveUrl = "example.org/a.zip";
-	CHECK(!a.installable());
-	a.archiveUrl = "http://";
-	CHECK(!a.installable());
-	a.archiveUrl = "http://example.org/a b.zip";
-	CHECK(!a.installable());
-	a.archiveUrl = "HTTP://example.org/a.zip";
-	CHECK(a.installable());
-	a.archiveMd5 = "0123456789abcdef0123456789abcde"; // 31 digits
-	CHECK(!a.installable());
-	a.archiveMd5 = "0123456789abcdef0123456789abcdeg";
-	CHECK(!a.installable());
+
+	// URLs: only the rebuilt OSC form.
+	for (const char* u : {"", "https://hbb1.oscwii.org/api/contents/x/x.zip", "http://example.org/a.zip", "ftp://example.org/a.zip",
+	                      "file:///etc/passwd", "example.org/a.zip", "http://", "http://hbb1.oscwii.org/api/contents/x/x.zip/y",
+	                      "http://hbb1.oscwii.org/api/contents/x/x.exe", "HTTP://hbb1.oscwii.org/api/contents/x/x.zip"}) {
+		a = installableApp();
+		a.archiveUrl = u;
+		CHECK(a.installRefusal() == InstallRefusal::NoArchiveUrl);
+	}
+
+	auto refusal = [](auto mutate) {
+		AppEntry e = installableApp();
+		mutate(e);
+		return e.installRefusal();
+	};
+	for (const char* m : {"", "0123456789abcdef0123456789abcde", "0123456789abcdef0123456789abcdeg", "0123456789abcdef0123456789abcdef0"})
+		CHECK(refusal([&](AppEntry& e) { e.archiveMd5 = m; }) == InstallRefusal::BadMd5);
+	CHECK(refusal([](AppEntry& e) { e.packageType = PackageType::Unknown; }) == InstallRefusal::UnknownPackage);
+	CHECK(refusal([](AppEntry& e) { e.packageType = PackageType::Elf; }) == InstallRefusal::None);
+	CHECK(refusal([](AppEntry& e) { e.archiveSize = 0; }) == InstallRefusal::BadArchiveSize);
+	CHECK(refusal([](AppEntry& e) { e.archiveSize = UINT64_C(4) << 30; }) == InstallRefusal::BadArchiveSize);
+	CHECK(refusal([](AppEntry& e) { e.archiveSize = kFat32MaxFile; }) == InstallRefusal::ArchiveTooLarge);
+	CHECK(refusal([](AppEntry& e) { e.archiveSize = kMaxArchiveBytes + 1; }) == InstallRefusal::ArchiveTooLarge);
+	CHECK(refusal([](AppEntry& e) { e.archiveSize = kMaxArchiveBytes; }) == InstallRefusal::None);
+	CHECK(refusal([](AppEntry& e) { e.uncompressedSize = 0; }) == InstallRefusal::BadInstallSize);
+	CHECK(refusal([](AppEntry& e) { e.uncompressedSize = kMaxInstallBytes + 1; }) == InstallRefusal::InstallTooLarge);
+	CHECK(refusal([](AppEntry& e) { e.uncompressedSize = kMaxInstallBytes; }) == InstallRefusal::None);
+	// The URL must carry this entry's own slug.
+	CHECK(refusal([](AppEntry& e) { e.slug = "a"; e.archiveUrl = "http://hbb1.oscwii.org/api/contents/b/b.zip"; }) ==
+	      InstallRefusal::NoArchiveUrl);
+	CHECK(refusal([](AppEntry& e) { e.slug = "a"; e.archiveUrl = "http://hbb1.oscwii.org/api/contents/a/a.zip"; }) == InstallRefusal::None);
+	CHECK(refusal([](AppEntry& e) { e.slug = "xy"; }) == InstallRefusal::NoArchiveUrl); // URL is for "x"
+	CHECK(refusal([](AppEntry& e) { e.subdirectories.clear(); }) == InstallRefusal::NoAppDir);
+	CHECK(refusal([](AppEntry& e) { e.subdirectories = {"/private/wii", "/apps", "/apps/"}; }) == InstallRefusal::NoAppDir);
+	CHECK(refusal([](AppEntry& e) { e.subdirectories = {"/private/wii", "/apps/y"}; }) == InstallRefusal::None);
 }
 
 static void testSearch() {
@@ -187,7 +216,11 @@ static void testFeaturedAndIndex() {
 	CHECK(mock.apps.size() > 30);
 	CHECK(mock.featured() != nullptr && mock.featured()->slug == mock.featuredSlug);
 	CHECK(!mock.apps[0].nameL.empty() && !mock.apps[0].iconUrl.empty());
-	for (auto& a : mock.apps) CHECK(isValidSlug(a.slug));
+	for (auto& a : mock.apps) {
+		CHECK(isValidSlug(a.slug));
+		CHECK(a.installable());
+		if (!a.installable()) std::fprintf(stderr, "  mock entry not installable: %s\n", a.slug.c_str());
+	}
 }
 
 int main() {

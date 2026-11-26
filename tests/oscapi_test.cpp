@@ -114,7 +114,7 @@ static void testRealFixtures() {
 		CHECK(d->binaryMd5 == "d41f21924dd7a7d359721bbc53a782b0" && d->binarySize == 430656);
 		CHECK(d->iconSize == 2404 && d->uncompressedSize == 433665);
 		CHECK(d->iconUrl == "http://hbb1.oscwii.org/api/contents/WiiDonut/icon.png");
-		CHECK(d->archiveUrl == "https://hbb1.oscwii.org/api/contents/WiiDonut/WiiDonut.zip");
+		CHECK(d->archiveUrl == "http://hbb1.oscwii.org/api/contents/WiiDonut/WiiDonut.zip");
 		CHECK(d->metaUrl == "https://hbb1.oscwii.org/unzipped_apps/WiiDonut/apps/WiiDonut/meta.xml");
 		CHECK(d->subdirectories.size() == 1 && d->subdirectories[0] == "/apps/WiiDonut");
 		CHECK(d->platforms.size() == 3 && d->peripherals.size() == 1 && d->peripherals[0] == "wii_remote");
@@ -147,6 +147,13 @@ static void testRealFixtures() {
 	CHECK(subdirs == 1047 && noDate == 1); // lilyskate has a negative release_date upstream
 	CHECK(c.find("cavestory") && c.find("cavestory")->subdirectories.size() == 79);
 	CHECK(installable == c.apps.size());
+	// Every archive URL is rebuilt to the plain-http form, and the stricter gate still passes all of them.
+	for (const auto& a : c.apps) {
+		CHECK(a.archiveUrl == "http://hbb1.oscwii.org/api/contents/" + a.slug + "/" + a.slug + ".zip");
+		CHECK(a.installRefusal() == InstallRefusal::None && isAllowedDownloadUrl(a.archiveUrl));
+	}
+	const AppEntry* mame = c.find("mame4wii");
+	CHECK(mame && mame->uncompressedSize < mame->archiveSize && mame->installable());
 	CHECK(r.stats.appsSkipped == 0 && r.stats.warningCount == 0);
 	CHECK(c.count("") == static_cast<int>(c.apps.size()));
 	CHECK(c.count("demos") + c.count("emulators") + c.count("games") + c.count("media") + c.count("utilities") ==
@@ -487,12 +494,17 @@ static std::string urlAsset(const std::string& url) {
 }
 
 static void testAssetUrls() {
-	BuildResult r = withAssets(urlAsset("https://hbb1.oscwii.org/x.zip"));
-	CHECK(r.ok() && r.catalog.apps[0].installable() && r.stats.warningCount == 0);
-	CHECK(r.catalog.apps[0].metaUrl == "https://hbb1.oscwii.org/x.zip");
-	r = withAssets(urlAsset("HTTP://hbb1.oscwii.org/x.zip"));
-	CHECK(r.ok() && r.catalog.apps[0].installable());
+	const char* good = "https://hbb1.oscwii.org/api/contents/u/u.zip";
+	const char* rebuilt = "http://hbb1.oscwii.org/api/contents/u/u.zip";
+	BuildResult r = withAssets(urlAsset(good));
+	CHECK(r.ok() && r.catalog.apps[0].archiveUrl == rebuilt && r.stats.warningCount == 0);
+	CHECK(r.catalog.apps[0].metaUrl == good); // binary and meta stay as parsed
+	r = withAssets(urlAsset("HTTP://HBB1.OSCWII.ORG/api/contents/u/U.ZIP"));
+	CHECK(r.ok() && r.catalog.apps[0].archiveUrl == "http://hbb1.oscwii.org/api/contents/u/U.ZIP");
+	r = withAssets(urlAsset("http://hbb1.oscwii.org:80/api/contents/u/u.zip"));
+	CHECK(r.ok() && r.catalog.apps[0].archiveUrl == rebuilt);
 
+	// Not http(s) at all: archive, binary and meta are all blanked.
 	const char* bad[] = {"file:///etc/passwd", "ftp://hbb1.oscwii.org/x.zip", "javascript:alert(1)", "hbb1.oscwii.org/x.zip",
 	                     "/api/contents/x.zip", "//hbb1.oscwii.org/x.zip", "http://", "https://", "data:text/html,x",
 	                     "http://a b/x", "https:/x", " http://x/y"};
@@ -509,11 +521,87 @@ static void testAssetUrls() {
 	r = withAssets(urlAsset("ftp://x/y"));
 	CHECK(r.catalog.apps[0].archiveMd5.size() == 32);
 
-	// Exactly the limit is kept whole; one more byte is dropped, never clipped to a different URL.
+	// Crafted archive URLs (the slug here is "u"): each is blanked with a warning; binary and meta (valid http) stay.
+	std::string long129 = std::string(125, 'a') + ".zip";
+	const char* evil[] = {"https://example.org/api/contents/u/u.zip", "https://hbb1.oscwii.org.evil/api/contents/u/u.zip",
+	                      "https://hbb1.oscwii.org@evil.org/api/contents/u/u.zip", "https://evil.org@hbb1.oscwii.org/api/contents/u/u.zip",
+	                      "https://hbb1.oscwii.org:8080/api/contents/u/u.zip", "http://hbb1.oscwii.org:443/api/contents/u/u.zip",
+	                      "https://hbb1.oscwii.org/api/contents/u/u.zip?x", "https://hbb1.oscwii.org/api/contents/u/u.zip#f",
+	                      "https://hbb1.oscwii.org/api/contents/u/%2e%2e.zip", "https://hbb1.oscwii.org/api/contents/%2e%2e/u.zip",
+	                      "https://hbb1.oscwii.org/api/contents/u/../u.zip", "https://hbb1.oscwii.org/api/contents/other/u.zip",
+	                      "https://hbb1.oscwii.org/api/contents/u/u.exe", "https://hbb1.oscwii.org/api/contents/u/CON.zip",
+	                      "https://hbb1.oscwii.org/api/contents/u/.u.zip", "https://hbb1.oscwii.org/api/contents/u/u/u.zip",
+	                      "https://hbb1.oscwii.org/api/contents/u/.zip", "https://hbb1.oscwii.org/unzipped_apps/u/u.zip",
+	                      "https://hbb1.oscwii.org/api/contents/u/", "https://hbb1.oscwii.org",
+	                      "ftp://hbb1.oscwii.org/api/contents/u/u.zip"};
+	for (const char* u : evil) {
+		r = withAssets("{\"archive\":{\"url\":\"" + std::string(u) + "\",\"hash\":\"0123456789abcdef0123456789abcdef\"}}");
+		CHECK(r.ok() && r.catalog.apps[0].archiveUrl.empty() && r.stats.warningCount == 1);
+		if (!r.catalog.apps[0].archiveUrl.empty() || r.stats.warningCount != 1) std::fprintf(stderr, "  url accepted or silent: %s\n", u);
+	}
+	r = withAssets("{\"archive\":{\"url\":\"https://hbb1.oscwii.org/api/contents/u/" + long129 + "\"}}");
+	CHECK(r.ok() && r.catalog.apps[0].archiveUrl.empty() && r.stats.warningCount == 1); // 129-byte file name
+	r = withAssets("{\"archive\":{\"url\":\"https://hbb1.oscwii.org/api/contents/u/" + long129.substr(1) + "\"}}");
+	CHECK(r.ok() && !r.catalog.apps[0].archiveUrl.empty() && r.stats.warningCount == 0); // 128 bytes is fine
+
+	// rebuildArchiveUrl directly.
+	CHECK(rebuildArchiveUrl("u", good) == rebuilt);
+	CHECK(rebuildArchiveUrl("u", "http://hbb1.oscwii.org/api/contents/u/a-b_c.1.ZIP") ==
+	      "http://hbb1.oscwii.org/api/contents/u/a-b_c.1.ZIP");
+	CHECK(rebuildArchiveUrl("bad/slug", good).empty() && rebuildArchiveUrl("", good).empty());
+	CHECK(rebuildArchiveUrl("u", "https://hbb1.oscwii.org/api/contents/u/a b.zip").empty());
+
+	// More host, syntax and file-name cases (slug "u"). Each is rejected.
+	const char* reject[] = {
+	    "http://hbb1.oscwii.org./api/contents/u/u.zip", "http://hbb1.oscwii.org:/api/contents/u/u.zip",
+	    "http://hbb1.oscwii.org:080/api/contents/u/u.zip", "https://hbb1.oscwii.org:/api/contents/u/u.zip",
+	    "http://hbb1.oscwii.org\\@evil/api/contents/u/u.zip", "http://hbb1.oscwii.org/api/contents/u\\u.zip",
+	    "http://hbb1.oscwii.org/api\\contents/u/u.zip", "http://hbb1.oscwii.org/api/contents/u//u.zip",
+	    "http://hbb1.oscwii.org/api/contents//u/u.zip", "http://hbb1.oscwii.org/api/contents/u/u.zip/",
+	    "http://hbb1.oscwii.org/api/contents/u/u%00.zip", "http://hbb1.oscwii.org/api/contents/u/u.zip%00",
+	    "http://hbb1.oscwii.org/api/contents/u/u.zip\n", "http://hbb1.oscwii.org/api/contents/u/u.zip ",
+	    "http://hbb1.oscwii.org/api/contents/u/com1.zip", "http://hbb1.oscwii.org/api/contents/u/NUL.tar.zip",
+	    "http://hbb1.oscwii.org/api/contents/u/COM9.zip", "http://hbb1.oscwii.org/api/contents/u/LPT1.zip",
+	    "http://hbb1.oscwii.org/api/contents/u/lpt9.ZIP", "http://hbb1.oscwii.org/api/contents/u/u.zip.exe",
+	    "http://hbb1.oscwii.org/api/contents/u/zip", "http://hbb1.oscwii.org/api/contents/u/a.zi"};
+	for (const char* u : reject) {
+		CHECK(rebuildArchiveUrl("u", u).empty());
+		if (!rebuildArchiveUrl("u", u).empty()) std::fprintf(stderr, "  accepted: %s\n", u);
+	}
+	// A fullwidth "h" (U+FF48) or a Cyrillic letter in the host is not the host.
+	CHECK(rebuildArchiveUrl("u", "http://\xEF\xBD\x88" "bb1.oscwii.org/api/contents/u/u.zip").empty());
+	CHECK(rebuildArchiveUrl("u", "http://hbb1.osc\xD1\x80" "ii.org/api/contents/u/u.zip").empty());
+	// https with its default port is fine, and is rebuilt as plain http.
+	CHECK(rebuildArchiveUrl("u", "https://hbb1.oscwii.org:443/api/contents/u/u.zip") == rebuilt);
+	CHECK(rebuildArchiveUrl("u", "http://hbb1.oscwii.org:80/api/contents/u/u.zip") == rebuilt);
+	// Odd but valid file names.
+	for (const char* f : {"u..zip", "u.zip.zip", "-.zip", "x.ZiP", "_.zip", "1.zip", "com10.zip", "con1.zip"}) {
+		std::string want = std::string("http://hbb1.oscwii.org/api/contents/u/") + f;
+		CHECK(rebuildArchiveUrl("u", want) == want);
+		CHECK(isAllowedDownloadUrl(want));
+	}
+
+	// isAllowedDownloadUrl accepts only rebuilt URLs.
+	CHECK(isAllowedDownloadUrl(rebuilt));
+	CHECK(!isAllowedDownloadUrl(good) && !isAllowedDownloadUrl("http://example.org/api/contents/u/u.zip"));
+	CHECK(!isAllowedDownloadUrl("http://hbb1.oscwii.org/api/contents/u/u.zip/extra"));
+	CHECK(!isAllowedDownloadUrl("http://hbb1.oscwii.org/api/contents/u/v/u.zip"));
+	CHECK(!isAllowedDownloadUrl("http://hbb1.oscwii.org/api/contents/u/u.exe") && !isAllowedDownloadUrl("") &&
+	      !isAllowedDownloadUrl("http://hbb1.oscwii.org/api/contents/u/") && !isAllowedDownloadUrl("http://hbb1.oscwii.org/api/contents//u.zip"));
+	CHECK(!isAllowedDownloadUrl("http://hbb1.oscwii.org/api/contents/u/u.zip?x") && !isAllowedDownloadUrl("http://hbb1.oscwii.org/api/contents/u/CON.zip"));
+
+	CHECK(!isAllowedDownloadUrl("HTTP://hbb1.oscwii.org/api/contents/u/u.zip"));
+	CHECK(!isAllowedDownloadUrl("http://hbb1.oscwii.org/api/contents/u/u.zip\n"));
+	CHECK(!isAllowedDownloadUrl("http://hbb1.oscwii.org/api/contents/u/u.zip/x") && !isAllowedDownloadUrl("http://hbb1.oscwii.org/api/contents/u"));
+	CHECK(isAllowedDownloadUrl(rebuilt) && !isAllowedDownloadUrl("https://hbb1.oscwii.org/api/contents/u/u.zip"));
+	CHECK(isAllowedDownloadUrl("http://hbb1.oscwii.org/api/contents/u/" + long129.substr(1)));  // 128-byte file name
+	CHECK(!isAllowedDownloadUrl("http://hbb1.oscwii.org/api/contents/u/" + long129));           // 129 bytes
+
+	// Exactly the limit is kept whole; one more byte is dropped, never clipped to a different URL (binary/meta).
 	std::string base = "https://h/";
 	std::string atMax = base + std::string(kMaxShortText - base.size(), 'a');
 	r = withAssets(urlAsset(atMax));
-	CHECK(r.ok() && r.catalog.apps[0].archiveUrl == atMax && r.stats.warningCount == 0);
+	CHECK(r.ok() && r.catalog.apps[0].metaUrl == atMax && r.catalog.apps[0].archiveUrl.empty() && r.stats.warningCount == 1);
 	r = withAssets(urlAsset(atMax + "a"));
 	CHECK(r.ok() && r.catalog.apps[0].archiveUrl.empty() && r.catalog.apps[0].metaUrl.empty() && r.stats.warningCount == 3);
 	CHECK(!r.catalog.apps[0].installable());
@@ -522,8 +610,9 @@ static void testAssetUrls() {
 	r = build(list({appJson(std::string(kMaxSlug, 'a')), "{\"slug\":\"" + std::string(kMaxSlug + 1, 'a') + "\",\"name\":\"n\"}"}));
 	CHECK(r.ok() && r.catalog.apps.size() == 1 && r.catalog.apps[0].slug.size() == kMaxSlug);
 	// No md5: not installable, whatever the URL.
-	r = withAssets("{\"archive\":{\"url\":\"https://x/y.zip\"}}");
-	CHECK(r.ok() && !r.catalog.apps[0].installable() && r.catalog.apps[0].archiveUrl == "https://x/y.zip");
+	r = withAssets("{\"archive\":{\"url\":\"https://hbb1.oscwii.org/api/contents/u/y.zip\"}}");
+	CHECK(r.ok() && !r.catalog.apps[0].installable() && r.catalog.apps[0].archiveUrl == "http://hbb1.oscwii.org/api/contents/u/y.zip");
+	CHECK(r.catalog.apps[0].installRefusal() == InstallRefusal::BadMd5);
 }
 
 static void testDates() {

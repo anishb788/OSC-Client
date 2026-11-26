@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <ctime>
 
+#include "catalog/OscApi.h"
 #include "core/Strings.h"
 
 namespace {
@@ -73,9 +74,25 @@ std::string sanitizeText(std::string_view s, bool singleLine) {
 	return out;
 }
 
-bool AppEntry::installable() const {
-	if (!isHttpUrl(archiveUrl) || archiveMd5.size() != 32) return false;
-	return std::all_of(archiveMd5.begin(), archiveMd5.end(), [](char c) { return std::isxdigit((unsigned char)c) != 0; });
+InstallRefusal AppEntry::installRefusal() const {
+	if (!oscapi::isAllowedDownloadUrl(archiveUrl)) return InstallRefusal::NoArchiveUrl;
+	// The URL must be this entry's own: its slug segment is the entry's slug (rebuildArchiveUrl guarantees it at parse
+	// time; this keeps a hand-built or mutated entry honest too).
+	const std::string ownPrefix = std::string(oscapi::kContentsUrl) + "/" + slug + "/";
+	if (archiveUrl.compare(0, ownPrefix.size(), ownPrefix) != 0) return InstallRefusal::NoArchiveUrl;
+	if (archiveMd5.size() != 32 ||
+	    !std::all_of(archiveMd5.begin(), archiveMd5.end(), [](char c) { return std::isxdigit((unsigned char)c) != 0; }))
+		return InstallRefusal::BadMd5;
+	if (packageType != PackageType::Dol && packageType != PackageType::Elf) return InstallRefusal::UnknownPackage;
+	// Increment 9's "Can't be installed" text should present a size >= 4 GiB as "too large", not as a bad size.
+	if (archiveSize == 0 || archiveSize > kFat32MaxFile) return InstallRefusal::BadArchiveSize;
+	if (archiveSize > kMaxArchiveBytes) return InstallRefusal::ArchiveTooLarge;
+	if (uncompressedSize == 0) return InstallRefusal::BadInstallSize;
+	if (uncompressedSize > kMaxInstallBytes) return InstallRefusal::InstallTooLarge;
+	// TODO(Increment 3, filterSubdirHint): ignore OpenShop's own /apps/OpenShop hints here; today one counts as an app dir.
+	bool appDir = std::any_of(subdirectories.begin(), subdirectories.end(),
+	                          [](const std::string& d) { return d.size() > 6 && d.compare(0, 6, "/apps/") == 0; });
+	return appDir ? InstallRefusal::None : InstallRefusal::NoAppDir;
 }
 
 bool isReservedDeviceName(std::string_view name) {

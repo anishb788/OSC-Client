@@ -6,7 +6,22 @@
 #include <string_view>
 #include <vector>
 
+#include "catalog/InstallLimits.h"
+
 enum class PackageType { Unknown, Dol, Elf };
+
+// Why an entry can't be installed (AppEntry::installRefusal). Order is the order the rules are checked.
+enum class InstallRefusal {
+	None,
+	NoArchiveUrl,    // blank, or not an allowed OSC archive URL
+	BadMd5,          // not 32 hex digits
+	UnknownPackage,  // package type is neither dol nor elf
+	BadArchiveSize,  // 0, or 4 GiB or more
+	ArchiveTooLarge, // above kMaxArchiveBytes
+	BadInstallSize,  // uncompressed size 0
+	InstallTooLarge, // uncompressed size above kMaxInstallBytes
+	NoAppDir,        // no subdirectory under /apps/
+};
 
 // Fields are declared in the order MockCatalog.cpp initialises them (C++20 designated initialisers must follow
 // declaration order). Add new fields with a default value, never reorder.
@@ -29,9 +44,10 @@ struct AppEntry {
 	std::string nameL{}, slugL{}, authorL{}, descL{}; // descL = shortDesc + " " + longDesc
 
 	bool hasFlag(std::string_view f) const;
-	// The only gate for installing (M3 must check it): an http(s) archive URL and a 32-hex archive MD5. An empty MD5
-	// means "refuse", never "skip the check". Over plain HTTP the MD5 protects against corruption, not a MITM.
-	bool installable() const;
+	// The only gate for installing (M3 must check it). First failing rule wins; None means installable. An empty MD5
+	// means "refuse", never "skip the check"; the MD5 detects corruption only.
+	InstallRefusal installRefusal() const;
+	bool installable() const { return installRefusal() == InstallRefusal::None; }
 };
 
 struct Category {

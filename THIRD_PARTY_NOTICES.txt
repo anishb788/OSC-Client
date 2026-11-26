@@ -17,7 +17,9 @@ say exactly which and where, and where nothing ships at all.
   FreeType                                  FreeType Licence (FTL)
   HarfBuzz                                  "Old MIT" licence
   libpng, zlib                              libpng licence, zlib licence
-  bzip2, Brotli                             bzip2 licence, MIT
+  bzip2, Brotli                             bzip2 licence, MIT (bzip2 is also pulled in by libzip)
+  libzip                                    BSD 3-clause (Dieter Baron and Thomas Klausner)
+  MD5 (src/third_party/md5)                 public domain (Alexander Peslyak / Solar Designer)
   libogg, Opus, opusfile                    BSD 3-clause (Xiph.Org Foundation)
   libmodplug                                public domain (no licence text ships with the package)
   jansson                                   MIT
@@ -443,6 +445,57 @@ Copyright notice:
 
   Jean-loup Gailly        Mark Adler
   jloup@gzip.org          madler@alumni.caltech.edu
+
+==============================================================================
+libzip (BSD 3-clause)
+==============================================================================
+
+libzip is linked statically (ppc-libzip 1.10.1 in the devkitPPC image) to read the app archives. It uses zlib and bzip2
+(both listed in this file); no lzma or zstd. The text below is the one the package ships, at
+/opt/devkitpro/portlibs/ppc/licenses/ppc-libzip/LICENSE.
+
+Copyright (C) 1999-2020 Dieter Baron and Thomas Klausner
+
+The authors can be contacted at <info@libzip.org>
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+
+1. Redistributions of source code must retain the above copyright
+  notice, this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright
+  notice, this list of conditions and the following disclaimer in
+  the documentation and/or other materials provided with the
+  distribution.
+
+3. The names of the authors may not be used to endorse or promote
+  products derived from this software without specific prior
+  written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE AUTHORS ``AS IS'' AND ANY EXPRESS
+OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY
+DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+==============================================================================
+MD5 (src/third_party/md5/md5.c, public domain)
+==============================================================================
+
+The MD5 used to detect corrupted downloads is Alexander Peslyak's (Solar Designer's) 2001 public-domain implementation,
+unchanged except for extern "C" guards in the header. In his words: "No copyright is claimed, and the software is hereby
+placed in the public domain. In case this attempt to disclaim copyright and place the software in the public domain is
+deemed null and void, then the software is Copyright (c) 2001 Alexander Peslyak and it is hereby released to the general
+public under the following terms: Redistribution and use in source and binary forms, with or without modification, are
+permitted. There's ABSOLUTELY NO WARRANTY, express or implied."
 
 ==============================================================================
 bzip2

@@ -1,9 +1,9 @@
 # Native Linux build of OpenShop for fast UI iteration (mouse = Wii Remote pointer).
-# Requires: libsdl2-dev libsdl2-ttf-dev libsdl2-mixer-dev libjansson-dev libsdl2-image-dev
+# Requires: libsdl2-dev libsdl2-ttf-dev libsdl2-mixer-dev libjansson-dev libsdl2-image-dev libzip-dev
 CXX      ?= g++
 BUILD    := build-pc
 TARGET   := $(BUILD)/openshop
-PKGS     := sdl2 SDL2_ttf SDL2_mixer SDL2_image jansson
+PKGS     := sdl2 SDL2_ttf SDL2_mixer SDL2_image jansson libzip
 
 # WERROR=1 turns any warning into an error (the zero-warning rule).
 # SAN=1 builds the app and the tests with AddressSanitizer + UBSan into build-pc-san/, so
@@ -27,7 +27,11 @@ TARGET   := $(BUILD)/openshop
 endif
 
 CXXFLAGS := -std=gnu++20 -g -O1 $(WARN) $(SANFLAGS) $(DEFS) -Isrc -MMD -MP $(shell pkg-config --cflags $(PKGS))
+CC       ?= gcc
+CFLAGS_C := -std=gnu11 -g -O1 $(WARN) $(SANFLAGS) -Isrc -MMD -MP
 ASFLAGS  := -Wa,-I.
+# libzip: the normal dynamic link (not --static, which on Debian drags in lzma/zstd/ssl). The Wii build is the one that
+# must stay at -lzip -lbz2 -lz; see Makefile.
 LDLIBS   := $(shell pkg-config --libs $(PKGS)) -lz -lm
 
 # The flags this build dir was made with (same idea as build/.flags in Makefile). Rewritten only when they change, so
@@ -44,10 +48,12 @@ STAMPDEP := FORCE
 endif
 $(STAMP): $(STAMPDEP)
 	@mkdir -p $(BUILD)
-	@printf '%s\n' '$(CXXFLAGS)' | cmp -s - $@ || printf '%s\n' '$(CXXFLAGS)' > $@
+	@printf '%s\n' '$(CXXFLAGS) $(CFLAGS_C)' | cmp -s - $@ || printf '%s\n' '$(CXXFLAGS) $(CFLAGS_C)' > $@
 
 SRCS := $(shell find src -name '*.cpp')
-OBJS := $(SRCS:%.cpp=$(BUILD)/%.o) $(BUILD)/src/assets.o
+# Vendored C sources (src/third_party/md5): compiled with the same warning flags, as C.
+CSRCS := $(shell find src -name '*.c')
+OBJS := $(SRCS:%.cpp=$(BUILD)/%.o) $(CSRCS:%.c=$(BUILD)/%.o) $(BUILD)/src/assets.o
 
 $(TARGET): $(OBJS)
 	$(CXX) $(SANFLAGS) -o $@ $^ $(LDLIBS)
@@ -55,6 +61,10 @@ $(TARGET): $(OBJS)
 $(BUILD)/%.o: %.cpp $(STAMP)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(BUILD)/%.o: %.c $(STAMP)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS_C) -c $< -o $@
 
 $(BUILD)/src/assets.o: src/assets.S $(wildcard assets/fonts/*.ttf)
 	@mkdir -p $(dir $@)
@@ -65,11 +75,11 @@ $(BUILD)/src/assets.o: src/assets.S $(wildcard assets/fonts/*.ttf)
 # rebuilds exactly the tests that include it (no hand-listed header dependencies to go stale). Test objects are kept
 # apart from the app's: they are built without DEFS, so a DEBUGTOOLS build dir never gets the debug log hooks in tests.
 # Fixtures under tests/fixtures/ are read at run time, so they are not build dependencies.
-TESTCXX := -std=gnu++20 -g -O1 $(WARN) $(SANFLAGS) -Isrc -Itests -pthread -MMD -MP $(shell pkg-config --cflags sdl2 SDL2_image jansson)
+TESTCXX := -std=gnu++20 -g -O1 $(WARN) $(SANFLAGS) -Isrc -Itests -pthread -MMD -MP $(shell pkg-config --cflags sdl2 SDL2_image jansson libzip)
 SDLLIBS := $(shell pkg-config --libs sdl2)
 JANSSONLIBS := $(shell pkg-config --libs jansson)
 
-tobj = $(patsubst %.cpp,$(BUILD)/tobj/%.o,$(1))
+tobj = $(patsubst %.c,$(BUILD)/tobj/%.o,$(patsubst %.cpp,$(BUILD)/tobj/%.o,$(1)))
 
 $(BUILD)/tobj/%.o: %.cpp $(STAMP)
 	@mkdir -p $(dir $@)
@@ -79,9 +89,14 @@ NETSRCS := src/net/HttpTransfer.cpp src/net/HttpPosix.cpp src/net/HttpParse.cpp 
 ICONSRCS := src/gfx/IconCache.cpp src/gfx/IconPng.cpp src/gfx/IconStore.cpp src/catalog/Catalog.cpp src/net/Worker.cpp $(NETSRCS)
 LOADERSRCS := src/catalog/NetLoader.cpp src/catalog/CatalogLoader.cpp src/catalog/MockLoader.cpp src/catalog/MockCatalog.cpp src/core/DevOptions.cpp src/catalog/OscApi.cpp src/catalog/CatalogCache.cpp src/catalog/Catalog.cpp src/net/Worker.cpp $(NETSRCS)
 
+# Vendored C sources used by tests (the MD5), with the app's C flags.
+$(BUILD)/tobj/%.o: %.c $(STAMP)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS_C) -c $< -o $@
+
 # name -> sources (tests/<name>.cpp is added automatically) and extra link libraries.
 TESTS := catalog_test core_test topbar_test layout_test http_parse_test http_transfer_test http_posix_test worker_test \
-         nettest_script_test oscapi_test netloader_test cache_test wrap_test httpget gfx_test icon_test
+         nettest_script_test oscapi_test netloader_test cache_test wrap_test httpget gfx_test icon_test install_test
 SRCS_catalog_test        := src/catalog/Catalog.cpp src/catalog/MockCatalog.cpp
 SRCS_core_test           := src/core/DevOptions.cpp
 SRCS_topbar_test         :=
@@ -111,6 +126,10 @@ LIBS_gfx_test            := $(SDLLIBS) -lm
 # Real icons: PNG validation, the SD icon store, the IconCache against a real worker and a loopback server.
 SRCS_icon_test           := $(ICONSRCS)
 LIBS_icon_test           := $(SDLLIBS) $(shell pkg-config --libs SDL2_image) -lz
+
+# M3: the pure install modules. MD5 is the vendored C file; libzip is linked from Increment 1 (zip_libzip_version).
+SRCS_install_test        := src/third_party/md5/md5.c
+LIBS_install_test        := $(shell pkg-config --libs libzip)
 
 define TESTRULE
 $$(BUILD)/tests/$(1): $$(call tobj,tests/$(1).cpp $$(SRCS_$(1)))

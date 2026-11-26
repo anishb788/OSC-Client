@@ -268,9 +268,9 @@ prepare_sd() {
 # ---------------------------------------------------------------- pc build
 
 pc_build() {
-	if ! pkg-config --exists sdl2 SDL2_ttf SDL2_mixer SDL2_image jansson 2>/dev/null; then
+	if ! pkg-config --exists sdl2 SDL2_ttf SDL2_mixer SDL2_image jansson libzip 2>/dev/null; then
 		err "SDL2 development packages missing. Install them with:"
-		echo "    sudo apt install libsdl2-dev libsdl2-ttf-dev libsdl2-mixer-dev libjansson-dev libsdl2-image-dev" >&2
+		echo "    sudo apt install libsdl2-dev libsdl2-ttf-dev libsdl2-mixer-dev libjansson-dev libsdl2-image-dev libzip-dev" >&2
 		return 1
 	fi
 	info "Building $TARGET (Linux)"

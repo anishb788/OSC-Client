@@ -107,9 +107,16 @@ the same file, so **delete `devstart`** from the SD card when you're done testin
 
 - **Toolchain:** the official `devkitpro/devkitppc` container via podman. A native devkitPro
   install is used instead when `$DEVKITPPC` is set.
-- **PC build:** needs `sudo apt install libsdl2-dev libsdl2-ttf-dev libsdl2-mixer-dev libsdl2-image-dev libjansson-dev zlib1g-dev`
+- **PC build:** needs `sudo apt install libsdl2-dev libsdl2-ttf-dev libsdl2-mixer-dev libsdl2-image-dev libjansson-dev libzip-dev zlib1g-dev`
   (plus `python3` for the test server). The Wii build needs nothing beyond the `devkitpro/devkitppc` image: SDL2,
-  SDL2_ttf, SDL2_mixer, SDL2_image, jansson, libpng and zlib are already in it.
+  SDL2_ttf, SDL2_mixer, SDL2_image, jansson, libpng, zlib, bzip2 and libzip (`ppc-libzip`, linked as
+  `-lzip -lbz2 -lz`, no lzma or zstd) are already in it. The PC build links libzip dynamically.
+- **Test container:** the host-side tests are run in a local `openshop-uitest` image (Debian trixie plus the PC build
+  packages above, including `libzip-dev`), defined in `tools/uitest.Containerfile`
+  (`podman build -t openshop-uitest -f tools/uitest.Containerfile tools`). A new PC dependency goes there as well as
+  in the apt line above.
+- **Archives and MD5:** archives come over plain http, so the MD5 from the catalog only detects corruption (truncation,
+  bad bytes), not tampering. The MD5 code is the public-domain `src/third_party/md5/`.
 - **Dolphin SD card:** Dolphin's virtual SD card is synced with `./sdcard`, which is
   git-ignored. The app reads `sdcard/apps/OpenShop/` both in Dolphin and in the PC build.
   Dolphin only writes the virtual SD back to `./sdcard` when emulation shuts down cleanly,
@@ -177,7 +184,7 @@ Font: M PLUS Rounded 1c by the M+ FONTS Project (SIL Open Font License 1.1, `ass
 
 OpenShop isn't affiliated with or endorsed by the Open Shop Channel. The Wii build statically links SDL2,
 SDL2_ttf, SDL2_image, SDL2_mixer, FreeType, HarfBuzz, libpng, zlib, bzip2, Brotli, libogg, Opus, opusfile,
-libmodplug, jansson, and from devkitPro libogc, libfat, wiiuse, bte (lwBT), libwiikeyboard, aesnd, newlib,
+libmodplug, jansson, libzip, a vendored public-domain MD5, and from devkitPro libogc, libfat, wiiuse, bte (lwBT), libwiikeyboard, aesnd, newlib,
 libstdc++ and libgcc. `THIRD_PARTY_NOTICES.txt`, which `./dev package` copies next to `boot.dol`, says for each of them
 where its licence text or notice comes from. libogc's LICENSE covers only libogc; for libfat, wiiuse and aesnd the
 devkitPPC image ships no licence text, and the notice file says so. libstdc++ and libgcc are GPLv3 with the GCC Runtime

@@ -17,6 +17,8 @@
 #include "platform/Platform.h"
 #include "ui/Widgets.h"
 
+#include <zip.h>
+
 bool App::init(int argc, char** argv) {
 	if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_TIMER) != 0) {
 		LOG("SDL_Init: %s", SDL_GetError());
@@ -53,6 +55,7 @@ bool App::init(int argc, char** argv) {
 		ui.icons = icons_.get();
 	}
 	LOG("OpenShop %s, User-Agent: %s", OPENSHOP_VERSION, userAgent());
+	LOG("libzip %s", zip_libzip_version()); // proves the archive library is linked (M3 installs use it)
 	LOG("Dev options: %s", opts.describe().c_str());
 	// A release must not behave differently because of a stray devstart file or environment variable, so say so loudly.
 	// (Compile-time gating of these hooks is a later item; this is only the warning.)

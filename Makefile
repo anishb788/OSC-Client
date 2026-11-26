@@ -35,6 +35,13 @@ PKGS	:=	sdl2 SDL2_ttf SDL2_mixer SDL2_image jansson
 PKG_CFLAGS	:=	$(shell $(PKGCONF) --cflags $(PKGS))
 PKG_LIBS	:=	$(shell $(PKGCONF) --libs $(PKGS))
 
+# libzip (M3 archive extraction). Checked inside the docker.io/devkitpro/devkitppc image: ppc-libzip 1.10.1-1,
+# libzip.pc has "Libs: -L${libdir} -lzip" and "Libs.private: -lbz2 -lz", so `pkg-config --static --libs libzip` gives
+# "-L/opt/devkitpro/portlibs/ppc/lib -lzip -lbz2 -lz". No lzma, zstd or crypto library is linked. It comes after PKG_LIBS
+# on the link line and is kept as its own variable so its flags stay visible. (zlib and bzip2 are in the image already.)
+LIBZIP_CFLAGS	:=	$(shell $(PKGCONF) --cflags libzip)
+LIBZIP_LIBS	:=	$(shell $(PKGCONF) --static --libs libzip)
+
 # WERROR=1 (e.g. `./dev build WERROR=1`) turns any warning into an error: the zero-warning rule.
 WARN	:=	-Wall -Wextra
 ifeq ($(WERROR),1)
@@ -49,7 +56,7 @@ ifeq ($(DEBUGTOOLS),1)
 DEFS	+=	-DOPENSHOP_DEBUGTOOLS
 endif
 
-CFLAGS	= -g -O2 $(WARN) $(DEFS) $(MACHDEP) $(INCLUDE) $(PKG_CFLAGS)
+CFLAGS	= -g -O2 $(WARN) $(DEFS) $(MACHDEP) $(INCLUDE) $(PKG_CFLAGS) $(LIBZIP_CFLAGS)
 CXXFLAGS	=	$(CFLAGS) -std=gnu++20
 ASFLAGS	=	-g $(MACHDEP) -Wa,-I$(ROOTDIR)
 
@@ -58,7 +65,7 @@ LDFLAGS	=	-g $(MACHDEP) -Wl,-Map,$(notdir $@).map
 #---------------------------------------------------------------------------------
 # any extra libraries we wish to link with the project
 #---------------------------------------------------------------------------------
-LIBS	:=	$(PKG_LIBS)
+LIBS	:=	$(PKG_LIBS) $(LIBZIP_LIBS)
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing

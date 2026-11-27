@@ -2,6 +2,9 @@
 // Host tests for the pure install modules. Build and run: make -f Makefile.pc test
 // Increment 1: the vendored MD5 and the libzip link.
 #include <cstdio>
+#include <filesystem>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -18,7 +21,10 @@
 #include "catalog/Catalog.h"
 #include "catalog/OscApi.h"
 #include "install/AppsDevice.h"
+#include "install/Journal.h"
+#include "install/Manifest.h"
 #include "install/MetaXml.h"
+#include "install/RecordIo.h"
 #include "install/Rules.h"
 #include "install/Version.h"
 #include "third_party/md5/md5.h"
@@ -704,6 +710,1209 @@ static void testMetaXml() {
 	CHECK(m.hasName);
 }
 
+// ---- Increment 5: manifests and journal ---------------------------------------------------------------------------------
+namespace fs = std::filesystem;
+using namespace install;
+
+struct RecTemp {
+	std::string path;
+	RecTemp() { char t[] = "/tmp/openshop-records-XXXXXX"; path = mkdtemp(t); }
+	~RecTemp() { std::error_code ec; fs::remove_all(path, ec); }
+};
+
+static void put(const std::string& p, const std::string& body) {
+	fs::create_directories(fs::path(p).parent_path());
+	std::ofstream(p, std::ios::binary) << body;
+}
+static bool has(const std::string& p) { std::error_code ec; return fs::exists(p, ec); }
+
+static Manifest sampleManifest(const std::string& slug = "wiimc") {
+	Manifest m;
+	m.slug = slug;
+	m.device = "sd";
+	m.version = "1.2.3";
+	m.installedAt = 1700000000;
+	m.archiveMd5 = "0123456789abcdef0123456789abcdef";
+	ManifestDir d;
+	d.path = "apps/WiiMC";
+	d.created = true;
+	d.files = {{"apps/WiiMC/boot.dol"}, {"apps/WiiMC/skins/a.png"}};
+	d.createdSubdirs = {{"apps/WiiMC/skins"}};
+	m.dirs.push_back(d);
+	m.files = {{"config/wiimc/x.ini", false}, {"config/shared.ini", true}};
+	m.createdDirs = {{"config"}, {"config/wiimc"}};
+	validateManifest(m);
+	return m;
+}
+
+static Journal sampleJournal(JournalPhase ph) {
+	Journal j;
+	j.phase = ph;
+	j.jobId = 7;
+	j.kind = JournalKind::Update;
+	j.slug = "wiimc";
+	j.device = "usb";
+	j.stagingDir = stagingRelPath(7);
+	if (ph == JournalPhase::Commit) {
+		j.ops = {
+		    {OpType::ParkDir, "apps/WiiMC", "apps/OpenShop/staging/7/old/apps/WiiMC", false, false},
+		    {OpType::RenameDir, "apps/WiiMC", "apps/OpenShop/staging/7/root/apps/WiiMC", false, false},
+		    {OpType::RestoreFile, "apps/WiiMC/user.cfg", "apps/OpenShop/staging/7/old/apps/WiiMC/user.cfg", false, false},
+		    {OpType::Mkdir, "config/wiimc", "", false, true},
+		    {OpType::ParkFile, "config/wiimc/x.ini", "apps/OpenShop/staging/7/old/config/wiimc/x.ini", false, false},
+		    {OpType::WriteFile, "config/wiimc/x.ini", "apps/OpenShop/staging/7/root/config/wiimc/x.ini", true, false},
+		    {OpType::WriteManifest, "apps/OpenShop/installed/wiimc.json", "apps/OpenShop/staging/7/manifest.json", false, false},
+		};
+		j.step = 3;
+	}
+	return j;
+}
+
+static Journal sampleInstallJournal() {
+	Journal j;
+	j.phase = JournalPhase::Commit;
+	j.jobId = 9;
+	j.kind = JournalKind::Install;
+	j.slug = "foo";
+	j.device = "sd";
+	j.stagingDir = stagingRelPath(9);
+	j.ops = {
+	    {OpType::RenameDir, "apps/foo", "apps/OpenShop/staging/9/root/apps/foo", false, false},
+	    {OpType::Mkdir, "config", "", false, false},
+	    {OpType::Mkdir, "config/foo", "", false, true},
+	    {OpType::Mkdir, "apps/foo/sub", "", false, true},
+	    {OpType::WriteFile, "config/foo/a.ini", "apps/OpenShop/staging/9/root/config/foo/a.ini", false, false},
+	    {OpType::ParkFile, "config/shared.ini", "apps/OpenShop/staging/9/old/config/shared.ini", false, false},
+	    {OpType::WriteFile, "config/shared.ini", "apps/OpenShop/staging/9/root/config/shared.ini", true, false},
+	    {OpType::WriteManifest, "apps/OpenShop/installed/foo.json", "apps/OpenShop/staging/9/manifest.json", false, false},
+	};
+	j.step = 2;
+	return j;
+}
+
+static void testManifestRoundTrip() {
+	RecTemp t;
+	Manifest m = sampleManifest();
+	CHECK(saveManifest(t.path, m));
+	CHECK(has(t.path + "/apps/OpenShop/installed/wiimc.json"));
+	CHECK(!has(t.path + "/apps/OpenShop/installed/wiimc.json.tmp"));
+	ManifestLoad l = loadManifest(t.path, "wiimc", "sd");
+	CHECK(l.status == LoadStatus::Ok);
+	const Manifest& r = l.manifest;
+	CHECK(r.slug == "wiimc" && r.device == "sd" && r.version == "1.2.3" && r.installedAt == 1700000000);
+	CHECK(r.archiveMd5 == m.archiveMd5);
+	CHECK(r.dirs.size() == 1 && r.dirs[0].path == "apps/WiiMC" && r.dirs[0].created && !r.dirs[0].adopted && r.dirs[0].valid);
+	CHECK(r.dirs[0].files.size() == 2 && r.dirs[0].files[1].path == "apps/WiiMC/skins/a.png" && r.dirs[0].files[1].valid);
+	CHECK(r.dirs[0].createdSubdirs.size() == 1 && r.dirs[0].createdSubdirs[0].path == "apps/WiiMC/skins");
+	CHECK(r.files.size() == 2 && r.files[0].path == "config/wiimc/x.ini" && !r.files[0].preexisting && r.files[1].preexisting);
+	CHECK(r.createdDirs.size() == 2 && r.createdDirs[1].path == "config/wiimc");
+	// A save over an existing record replaces it and leaves no tmp or bak.
+	m.version = "2.0";
+	CHECK(saveManifest(t.path, m));
+	CHECK(loadManifest(t.path, "wiimc", "sd").manifest.version == "2.0");
+	CHECK(!has(t.path + "/apps/OpenShop/installed/wiimc.json.tmp") && !has(t.path + "/apps/OpenShop/installed/wiimc.json.bak"));
+	// Case-insensitive lookup is not needed, but a slug that is not valid never touches the disk.
+	CHECK(loadManifest(t.path, "../x", "sd").status == LoadStatus::Missing);
+	CHECK(loadManifest(t.path, "nothere", "sd").status == LoadStatus::Missing);
+	CHECK(removeManifest(t.path, "wiimc"));
+	CHECK(loadManifest(t.path, "wiimc", "sd").status == LoadStatus::Missing);
+	// Save refuses what could never load.
+	Manifest bad = sampleManifest();
+	bad.slug = "../x";
+	CHECK(!saveManifest(t.path, bad));
+	bad = sampleManifest();
+	bad.device = "floppy";
+	CHECK(!saveManifest(t.path, bad));
+	bad = sampleManifest();
+	bad.archiveMd5 = "zz";
+	CHECK(!saveManifest(t.path, bad));
+	CHECK(!has(t.path + "/apps/OpenShop/installed/x.json"));
+}
+
+static void testManifestCorrupt() {
+	const std::string good = manifestToJson(sampleManifest());
+	CHECK(parseManifest(good).ok);
+	// Truncation at every length is rejected or (for a prefix that is a whole object) never crashes.
+	int accepted = 0;
+	for (size_t n = 0; n < good.size(); n++) if (parseManifest(good.substr(0, n)).ok) accepted++;
+	CHECK(accepted == 0);
+	auto bad = [](std::string_view text) { return !parseManifest(text).ok; };
+	CHECK(bad(""));
+	CHECK(bad("[]"));
+	CHECK(bad("null"));
+	CHECK(bad("{}"));
+	CHECK(bad(R"({"formatVersion":1,"device":"sd"})"));                         // no slug
+	CHECK(bad(R"({"formatVersion":2,"slug":"a","device":"sd"})"));              // unknown future version
+	CHECK(bad(R"({"formatVersion":0,"slug":"a","device":"sd"})"));
+	CHECK(bad(R"({"formatVersion":"1","slug":"a","device":"sd"})"));
+	CHECK(bad(R"({"formatVersion":1,"slug":7,"device":"sd"})"));
+	CHECK(bad(R"({"formatVersion":1,"slug":"../x","device":"sd"})"));
+	CHECK(bad(R"({"formatVersion":1,"slug":"a/b","device":"sd"})"));
+	CHECK(bad(R"({"formatVersion":1,"slug":"a","device":"floppy"})"));
+	CHECK(bad(R"({"formatVersion":1,"slug":"a","device":"sd","dirs":{}})"));
+	CHECK(bad(R"({"formatVersion":1,"slug":"a","device":"sd","dirs":[1]})"));
+	CHECK(bad(R"({"formatVersion":1,"slug":"a","device":"sd","dirs":[{"path":7}]})"));
+	CHECK(bad(R"({"formatVersion":1,"slug":"a","device":"sd","dirs":[{"path":"apps/a","files":[1]}]})"));
+	CHECK(bad(R"({"formatVersion":1,"slug":"a","device":"sd","files":["x"]})"));
+	CHECK(bad(R"({"formatVersion":1,"slug":"a","device":"sd","createdDirs":[[]]})"));
+	CHECK(bad(R"({"formatVersion":1,"slug":"a","device":"sd","version":5})"));
+	CHECK(bad(R"({"formatVersion":1,"slug":"a","device":"sd","installedAt":"now"})"));
+	CHECK(bad(R"({"formatVersion":1,"slug":"a","device":"sd","installedAt":-1})"));
+	CHECK(bad(R"({"formatVersion":1,"slug":"a","device":"sd","archiveMd5":"xyz"})"));
+	CHECK(bad(R"({"formatVersion":1,"slug":"a","slug":"b","device":"sd"})"));  // duplicate keys
+	CHECK(bad(std::string(R"({"formatVersion":1,"slug":"a","device":"sd","version":")") + std::string(300, 'v') + "\"}"));
+	CHECK(bad(std::string(R"({"formatVersion":1,"slug":"a","device":"sd","files":[{"path":")") + std::string(2000, 'p') + "\"}]}"));
+	// Minimal and lenient forms are fine: an unknown field is ignored, optional fields default.
+	ManifestParse p = parseManifest(R"({"formatVersion":1,"slug":"a","device":"usb","future":{"x":[1,2]},"dirs":[{"path":"apps/a"}],"archiveMd5":"0123456789ABCDEF0123456789ABCDEF"})");
+	CHECK(p.ok && p.manifest.device == "usb" && p.manifest.dirs.size() == 1 && p.manifest.archiveMd5 == "0123456789abcdef0123456789abcdef");
+	// At least one dirs[] entry is required (L4).
+	CHECK(bad(R"({"formatVersion":1,"slug":"a","device":"sd"})"));
+	CHECK(bad(R"({"formatVersion":1,"slug":"a","device":"sd","dirs":[]})"));
+	// The flags are lenient and read as the safe value on a wrong type (L6): created/adopted false, preexisting true.
+	p = parseManifest(R"({"formatVersion":1,"slug":"a","device":"sd","dirs":[{"path":"apps/a","created":"yes","adopted":1}],"files":[{"path":"config/a/x","preexisting":1},{"path":"config/a/y","preexisting":false}]})");
+	CHECK(p.ok && !p.manifest.dirs[0].created && !p.manifest.dirs[0].adopted && p.manifest.files[0].preexisting && !p.manifest.files[1].preexisting);
+	// Two dirs entries for one folder, also across case and accents, are refused (the nice-to-have dedupe).
+	CHECK(bad(R"({"formatVersion":1,"slug":"a","device":"sd","dirs":[{"path":"apps/a"},{"path":"apps/A"}]})"));
+	CHECK(bad(std::string(R"({"formatVersion":1,"slug":"a","device":"sd","dirs":[{"path":"apps/\u00c9clair"},{"path":"apps/\u00e9clair"}]})")));
+	// An unknown field inside a dir and a file entry is ignored too; adopted of the wrong type reads false; a missing
+	// "preexisting" reads true (never remove what we cannot vouch for).
+	p = parseManifest(R"({"formatVersion":1,"slug":"a","device":"sd","dirs":[{"path":"apps/a","created":false,"adopted":"yes","extra":1,"files":["apps/a/boot.dol"]}],"files":[{"path":"config/a/x"}]})");
+	CHECK(p.ok && !p.manifest.dirs[0].adopted && !p.manifest.dirs[0].created && p.manifest.dirs[0].createdSubdirs.empty());
+	CHECK(p.ok && p.manifest.files[0].preexisting);
+	p = parseManifest(R"({"formatVersion":1,"slug":"a","device":"sd","dirs":[{"path":"apps/a","adopted":true}]})");
+	CHECK(p.ok && p.manifest.dirs[0].adopted);
+	// Hostile shapes: deep nesting is refused before jansson recurses, a huge array is capped, a NUL escape is refused.
+	CHECK(bad(std::string(100000, '[')));
+	CHECK(bad(R"({"formatVersion":1,"slug":"a","device":"sd","x":)" + std::string(50, '[') + std::string(50, ']') + "}"));
+	CHECK(bad(R"({"formatVersion":1,"slug":"a","device":"sd","version":"a\u0000b"})"));
+	{
+		std::string many = R"({"formatVersion":1,"slug":"a","device":"sd","dirs":[{"path":"apps/a"}],"createdDirs":[)";
+		for (size_t i = 0; i <= kMaxManifestPaths; i++) many += i ? ",\"c\"" : "\"c\"";
+		many += "]}";
+		CHECK(bad(many));
+		std::string ok = R"({"formatVersion":1,"slug":"a","device":"sd","dirs":[{"path":"apps/a"}],"createdDirs":[)";
+		for (size_t i = 0; i < kMaxManifestPaths; i++) ok += i ? ",\"c\"" : "\"c\"";
+		ok += "]}";
+		CHECK(parseManifest(ok).ok);
+	}
+	CHECK(bad(std::string(kMaxManifestBytes + 1, ' ')));
+	// Binary garbage.
+	std::string junk;
+	for (int i = 0; i < 4096; i++) junk += (char)((i * 131 + 7) & 0xff);
+	CHECK(bad(junk));
+
+	// On disk: oversize, garbage, wrong slug and a directory in place of the file all give Corrupt, never a crash.
+	RecTemp t;
+	const std::string dir = t.path + "/apps/OpenShop/installed/";
+	put(dir + "big.json", std::string(kMaxManifestBytes + 1, ' '));
+	CHECK(loadManifest(t.path, "big", "sd").status == LoadStatus::Corrupt);
+	put(dir + "junk.json", junk);
+	CHECK(loadManifest(t.path, "junk", "sd").status == LoadStatus::Corrupt);
+	put(dir + "other.json", manifestToJson(sampleManifest("wiimc")));
+	CHECK(loadManifest(t.path, "other", "sd").status == LoadStatus::Corrupt);
+	fs::create_directories(dir + "dirrec.json");
+	CHECK(loadManifest(t.path, "dirrec", "sd").status == LoadStatus::Corrupt);
+}
+
+static void testManifestPathFlags() {
+	Manifest m = sampleManifest();
+	m.dirs.push_back({"apps/OpenShop", true, false, {{"apps/OpenShop/x"}}, {}, true});
+	m.dirs.push_back({"apps/../x", true, false, {{"apps/../x/y"}}, {}, true});
+	m.dirs.push_back({"apps/ok", true, false, {{"apps/ok/boot.dol"}, {"apps/other/boot.dol"}, {"apps/ok/../../x"}, {"apps/OK2/x"}, {"apps/ok/CON.txt"}}, {{"apps/ok"}}, true});
+	m.files.push_back({"private/x", false, true});
+	m.files.push_back({"apps/foo/x", false, true});
+	m.files.push_back({"a\\b", false, true});
+	m.files.push_back({"sd:/x", false, true});
+	m.files.push_back({"/etc/x", false, true});
+	m.createdDirs.push_back({"title"});
+	m.createdDirs.push_back({"config/"});
+	m.files.push_back({"boot.elf", false, true});     // a file directly in the device root: two segments are required
+	m.files.push_back({"autoexec.bin", false, true});
+	m.dirs[0].files.push_back({"apps"});
+	validateManifest(m);
+	CHECK(m.dirs[0].valid);
+	CHECK(!m.dirs[1].valid && !m.dirs[1].files[0].valid);   // own folder
+	CHECK(!m.dirs[2].valid && !m.dirs[2].files[0].valid);   // traversal
+	CHECK(m.dirs[3].valid && m.dirs[3].files[0].valid);
+	CHECK(!m.dirs[3].files[1].valid && !m.dirs[3].files[2].valid && !m.dirs[3].files[3].valid && !m.dirs[3].files[4].valid);
+	CHECK(!m.dirs[3].createdSubdirs[0].valid);              // not strictly below its own dir
+	CHECK(m.files[0].valid && m.files[1].valid);
+	for (size_t i = 2; i < m.files.size(); i++) CHECK(!m.files[i].valid);
+	CHECK(m.files[m.files.size() - 1].path == "autoexec.bin" && !isOutsideFilePath("boot.elf") && isOutsideFilePath("config/x"));
+	CHECK(isOutsidePath("config") && isOutsidePath("boot.elf") && !isTargetFilePath("boot.elf") && isTargetFilePath("apps/a/boot.dol"));
+	CHECK(!m.dirs[0].files.back().valid);
+	CHECK(m.createdDirs[0].valid && m.createdDirs[1].valid && !m.createdDirs[2].valid && !m.createdDirs[3].valid);
+	// Kept as data: a round trip keeps the entries and they come back flagged.
+	RecTemp t;
+	CHECK(saveManifest(t.path, m));
+	ManifestLoad l = loadManifest(t.path, "wiimc", "sd");
+	CHECK(l.status == LoadStatus::Ok);
+	CHECK(l.manifest.files.size() == m.files.size() && l.manifest.files[4].path == "a\\b" && !l.manifest.files[4].valid);
+	CHECK(l.manifest.dirs.size() == 4 && !l.manifest.dirs[1].valid && l.manifest.dirs[3].valid);
+	// Invalid paths never answer a query.
+	std::vector<Manifest> all{l.manifest};
+	CHECK(manifestsReferencing(all, "private/x").empty());
+	CHECK(manifestsReferencing(all, "apps/OpenShop/x").empty());
+	CHECK(dirOwners(all, "apps/OpenShop").empty());
+	CHECK(manifestsReferencing(all, "config/shared.ini").size() == 1);
+}
+
+static void testManifestQueries() {
+	Manifest a = sampleManifest("wiimc");
+	Manifest b = sampleManifest("other");
+	b.dirs.clear();
+	b.dirs.push_back({"apps/wiimc", false, false, {{"apps/wiimc/boot.dol"}}, {}, true});
+	b.files = {{"config/shared.ini", true}};
+	b.createdDirs.clear();
+	Manifest c = sampleManifest("third");
+	c.dirs.clear();
+	c.files = {{"Config/Third/y.ini", false}};
+	c.createdDirs = {{"config/third"}};
+	validateManifest(b);
+	validateManifest(c);
+	std::vector<Manifest> all{a, b, c};
+	std::vector<std::string> r = manifestsReferencing(all, "config/shared.ini");
+	CHECK(r.size() == 2 && r[0] == "wiimc" && r[1] == "other");
+	CHECK(manifestsReferencing(all, "CONFIG/Shared.INI", "wiimc") == std::vector<std::string>{"other"});
+	CHECK(manifestsReferencing(all, "config/third/y.ini") == std::vector<std::string>{"third"});
+	CHECK(manifestsReferencing(all, "config/nothing").empty());
+	CHECK(manifestsReferencing(all, "apps/WiiMC/skins") == std::vector<std::string>{"wiimc"}); // a created subdir counts
+	CHECK(manifestsReferencing(all, "config") == std::vector<std::string>{"wiimc"});           // a created dir counts
+	r = dirOwners(all, "apps/WiiMC");
+	CHECK(r.size() == 2 && r[0] == "wiimc" && r[1] == "other"); // "other" lists apps/wiimc
+	CHECK(dirOwners(all, "apps/wiimc", "WIIMC") == std::vector<std::string>{"other"});
+	CHECK(dirOwners(all, "apps/none").empty());
+	CHECK(dirOwners(all, "apps/WiiMC/skins").empty()); // not a dir entry
+
+	// listManifests over a device: good ones, a corrupt one, junk names, a lone .bak, a journal that is not a manifest.
+	RecTemp t;
+	CHECK(!listManifests(t.path, "sd").listed);
+	CHECK(saveManifest(t.path, a) && saveManifest(t.path, b));
+	const std::string dir = t.path + "/apps/OpenShop/installed/";
+	put(dir + "broken.json", "{\"formatVersion\":");
+	put(dir + "notes.txt", "hi");
+	put(dir + "x.json.tmp", "half");
+	put(dir + ".json", "{}");
+	put(dir + "bad name.json", "{}");
+	put(dir + ".journal", manifestToJson(a)); // not a manifest, not listed
+	put(dir + "onlybak.json.bak", manifestToJson(sampleManifest("onlybak")));
+	put(dir + "wiimc.json.bak", manifestToJson(sampleManifest("wiimc"))); // stale; the .json wins
+	ManifestList ml = listManifests(t.path, "sd");
+	CHECK(ml.listed && !ml.truncated);
+	CHECK(ml.manifests.size() == 3);
+	CHECK(ml.corrupt.size() == 1 && ml.corrupt[0] == "broken");
+	std::set<std::string> slugs;
+	for (const Manifest& m : ml.manifests) slugs.insert(m.slug);
+	CHECK(slugs == std::set<std::string>({"wiimc", "other", "onlybak"}));
+	// Many files: capped, not unbounded.
+	RecTemp t2;
+	for (size_t i = 0; i < kMaxManifestsPerDevice + 5; i++) put(t2.path + "/apps/OpenShop/installed/s" + std::to_string(i) + ".json", "x");
+	ml = listManifests(t2.path, "sd");
+	CHECK(ml.truncated && ml.manifests.size() + ml.corrupt.size() == kMaxManifestsPerDevice);
+}
+
+static void testMergeForUpdate() {
+	Manifest old = sampleManifest("wiimc");
+	old.dirs[0].files.push_back({"apps/WiiMC/dropped.bin"});
+	old.dirs[0].createdSubdirs.push_back({"apps/WiiMC/olddir"});
+	old.files.push_back({"config/wiimc/dropped.ini", false});
+	old.createdDirs.push_back({"config/olddir"});
+	old.dirs.push_back({"apps/WiiMC2", true, false, {{"apps/WiiMC2/boot.dol"}}, {}, true});
+	validateManifest(old);
+
+	Manifest neu;
+	neu.slug = "wiimc";
+	neu.device = "sd";
+	neu.version = "2.0";
+	neu.installedAt = 1800000000;
+	neu.archiveMd5 = "ffffffffffffffffffffffffffffffff";
+	// The update thinks it found the folder (created=false) and the file pre-existing; the old values win.
+	neu.dirs.push_back({"apps/wiimc", false, false, {{"apps/wiimc/boot.dol"}, {"apps/wiimc/new.dat"}}, {{"apps/wiimc/skins"}}, true});
+	neu.files = {{"config/wiimc/x.ini", true, true}, {"config/new.ini", false, true}};
+	neu.createdDirs = {{"config/newdir"}};
+	validateManifest(neu);
+
+	Manifest m = mergeForUpdate(&old, neu);
+	CHECK(m.version == "2.0" && m.installedAt == 1800000000 && m.archiveMd5 == neu.archiveMd5 && m.slug == "wiimc");
+	CHECK(m.dirs.size() == 2); // apps/wiimc (merged with the old apps/WiiMC) and the old apps/WiiMC2 kept whole
+	const ManifestDir& d = m.dirs[0];
+	CHECK(d.path == "apps/wiimc" && d.created && !d.adopted);                  // old created kept
+	std::vector<std::string> files;
+	for (const ManifestPath& f : d.files) files.push_back(f.path);
+	CHECK((files == std::vector<std::string>{"apps/wiimc/boot.dol", "apps/wiimc/new.dat", "apps/WiiMC/skins/a.png", "apps/WiiMC/dropped.bin"}));
+	CHECK(d.createdSubdirs.size() == 2 && d.createdSubdirs[0].path == "apps/wiimc/skins" && d.createdSubdirs[1].path == "apps/WiiMC/olddir");
+	CHECK(m.dirs[1].path == "apps/WiiMC2" && m.dirs[1].created);
+	CHECK(m.files.size() == 4);
+	bool sawX = false, sawDropped = false, sawNew = false;
+	for (const ManifestFile& f : m.files) {
+		if (f.path == "config/wiimc/x.ini") { sawX = true; CHECK(!f.preexisting); } // old false beats new true
+		if (f.path == "config/wiimc/dropped.ini") sawDropped = true;
+		if (f.path == "config/new.ini") { sawNew = true; CHECK(!f.preexisting); }
+	}
+	CHECK(sawX && sawDropped && sawNew);
+	// "config/shared.ini" was only in old (preexisting) and is kept as listed, preexisting intact.
+	bool shared = false;
+	for (const ManifestFile& f : m.files) if (f.path == "config/shared.ini") shared = f.preexisting;
+	CHECK(shared);
+	std::vector<std::string> cd;
+	for (const ManifestPath& p : m.createdDirs) cd.push_back(p.path);
+	CHECK((cd == std::vector<std::string>{"config/newdir", "config", "config/wiimc", "config/olddir"}));
+	// adopted and created are kept from old when old had adopted.
+	old.dirs[0].created = false;
+	old.dirs[0].adopted = true;
+	m = mergeForUpdate(&old, neu);
+	CHECK(!m.dirs[0].created && m.dirs[0].adopted);
+	// Merging twice is stable (idempotent on the lists).
+	Manifest m2 = mergeForUpdate(&m, neu);
+	CHECK(m2.dirs[0].files.size() == m.dirs[0].files.size() && m2.files.size() == m.files.size() && m2.createdDirs.size() == m.createdDirs.size());
+
+	// No old manifest (update over a folder OpenShop didn't install).
+	Manifest n2;
+	n2.slug = "wiimc";
+	n2.device = "sd";
+	n2.dirs.push_back({"apps/WiiMC", true, false, {{"apps/WiiMC/boot.dol"}}, {{"apps/WiiMC/newsub"}}, true});
+	n2.dirs.push_back({"apps/OtherApp", true, true, {{"apps/OtherApp/boot.dol"}}, {}, true});
+	n2.files = {{"config/wiimc/x.ini", true, true}};
+	m = mergeForUpdate(nullptr, n2);
+	CHECK(m.dirs.size() == 2);
+	CHECK(!m.dirs[0].created && m.dirs[0].adopted);   // the app's own folder (name == slug, case-insensitive)
+	CHECK(!m.dirs[1].created && !m.dirs[1].adopted);  // a replaced different-app folder
+	CHECK(m.dirs[0].files.size() == 1 && m.dirs[0].createdSubdirs.size() == 1 && m.files.size() == 1 && m.files[0].preexisting);
+	// The adopted flag survives a save, a load and a later merge with old.
+	RecTemp t;
+	CHECK(saveManifest(t.path, m));
+	ManifestLoad l = loadManifest(t.path, "wiimc", "sd");
+	CHECK(l.status == LoadStatus::Ok && l.manifest.dirs[0].adopted && !l.manifest.dirs[0].created && !l.manifest.dirs[1].adopted);
+	Manifest m3 = mergeForUpdate(&l.manifest, n2);
+	CHECK(m3.dirs[0].adopted && !m3.dirs[0].created && !m3.dirs[1].adopted);
+	// A hostile old manifest with the same file listed 40000 times merges quickly (no quadratic scan).
+	Manifest big = old;
+	for (int i = 0; i < 30000; i++) big.files.push_back({"config/big/f" + std::to_string(i), false, true});
+	m = mergeForUpdate(&big, neu);
+	CHECK(m.files.size() >= 30000);
+}
+
+// ---- crash-safe writes --------------------------------------------------------------------------------------------------
+static int g_renameCalls = 0;
+static int g_failAtRename = 0;
+static int renameFailAt(const char* a, const char* b) {
+	g_renameCalls++;
+	if (g_failAtRename && g_renameCalls >= g_failAtRename) return -1; // from call N on: a dead medium
+	return std::rename(a, b);
+}
+// libfat: cannot rename over an existing file.
+static int renameLikeFat(const char* a, const char* b) {
+	g_renameCalls++;
+	if (g_failAtRename && g_renameCalls == g_failAtRename) return -1;
+	if (has(b)) return -1;
+	return std::rename(a, b);
+}
+static int renameExitAt(const char* a, const char* b) {
+	if (++g_renameCalls == g_failAtRename) _Exit(0); // power cut right before this rename
+	if (has(b)) return -1;
+	return std::rename(a, b);
+}
+static size_t shortWrite(const void* d, size_t n, std::FILE* f) { return std::fwrite(d, 1, n / 2, f); }
+static bool failingFsync(std::FILE*) { return false; }
+static int g_fsyncCalls = 0;
+static bool countingFsync(std::FILE* f) { g_fsyncCalls++; return fsyncFile(f); }
+
+static bool runForked(void (*body)()) {
+	pid_t pid = fork();
+	if (pid == 0) { body(); _Exit(1); } // _Exit(0) inside means "the cut happened"
+	int st = 0;
+	waitpid(pid, &st, 0);
+	return WIFEXITED(st) && WEXITSTATUS(st) == 0;
+}
+
+static std::string g_crashRoot;
+static void crashSave() {
+	FileOps ops;
+	ops.rename = renameExitAt;
+	Manifest m = sampleManifest();
+	m.version = "NEW";
+	saveManifest(g_crashRoot, m, ops);
+}
+
+static void testRecordWrites() {
+	RecTemp t;
+	const std::string rec = t.path + "/apps/OpenShop/installed/wiimc.json";
+	Manifest m = sampleManifest();
+	CHECK(saveManifest(t.path, m));
+	// fsync happens before the rename.
+	{
+		FileOps ops;
+		ops.fsync = countingFsync;
+		g_fsyncCalls = 0;
+		m.version = "fsynced";
+		CHECK(saveManifest(t.path, m, ops) && g_fsyncCalls == 1);
+		CHECK(loadManifest(t.path, "wiimc", "sd").manifest.version == "fsynced");
+	}
+	// A failed fsync, a short write and a failed rename each leave the previous record intact and no tmp behind.
+	m.version = "NEW";
+	{
+		FileOps ops;
+		ops.fsync = failingFsync;
+		CHECK(!saveManifest(t.path, m, ops));
+	}
+	{
+		FileOps ops;
+		ops.write = shortWrite;
+		CHECK(!saveManifest(t.path, m, ops));
+	}
+	{
+		FileOps ops;
+		ops.rename = renameFailAt;
+		g_renameCalls = 0;
+		g_failAtRename = 1;
+		CHECK(!saveManifest(t.path, m, ops));
+		g_failAtRename = 0;
+	}
+	CHECK(loadManifest(t.path, "wiimc", "sd").manifest.version == "fsynced");
+	CHECK(!has(rec + ".tmp"));
+
+	// libfat dance: the old record is parked as .bak, then the new one renamed in. Fail the second rename: the old one is back.
+	{
+		FileOps ops;
+		ops.rename = renameLikeFat;
+		g_renameCalls = 0;
+		g_failAtRename = 3; // 1: tmp->rec fails (exists), 2: rec->bak, 3: tmp->rec
+		CHECK(!saveManifest(t.path, m, ops));
+		g_failAtRename = 0;
+		CHECK(loadManifest(t.path, "wiimc", "sd").manifest.version == "fsynced");
+		g_renameCalls = 0;
+		CHECK(saveManifest(t.path, m, ops)); // and it works when nothing fails
+		CHECK(loadManifest(t.path, "wiimc", "sd").manifest.version == "NEW");
+		CHECK(!has(rec + ".bak") && !has(rec + ".tmp"));
+	}
+
+	// A real cut (forked child exits right before a rename). Cut 1: before the first rename, a complete tmp is left, and the
+	// record is the old one. Cut 3 (the dance): record parked as .bak, nothing under the real name; the loader finds the .bak.
+	g_crashRoot = t.path;
+	for (int cut : {1, 2, 3}) {
+		RecTemp t2;
+		g_crashRoot = t2.path;
+		Manifest old = sampleManifest();
+		old.version = "OLD";
+		CHECK(saveManifest(t2.path, old));
+		g_renameCalls = 0;
+		g_failAtRename = cut;
+		CHECK(runForked(crashSave));
+		g_failAtRename = 0;
+		const std::string r2 = t2.path + "/apps/OpenShop/installed/wiimc.json";
+		ManifestLoad l = loadManifest(t2.path, "wiimc", "sd");
+		CHECK(l.status == LoadStatus::Ok);
+		CHECK(l.manifest.version == "OLD");
+		CHECK(l.fromBackup == (cut == 3));
+		CHECK(has(r2 + ".tmp"));               // the half-done save is left over, never under the real name
+		CHECK(!has(r2) == (cut == 3));
+		ManifestList ml = listManifests(t2.path, "sd");
+		CHECK(ml.manifests.size() == 1 && ml.corrupt.empty() && ml.manifests[0].version == "OLD");
+		// The next save cleans up and wins.
+		Manifest nx = old;
+		nx.version = "AFTER";
+		CHECK(saveManifest(t2.path, nx));
+		CHECK(loadManifest(t2.path, "wiimc", "sd").manifest.version == "AFTER" && !has(r2 + ".bak") && !has(r2 + ".tmp"));
+	}
+	// A partial record under the real name (a medium that lied) is Corrupt, and a leftover half .tmp does not matter.
+	put(rec, manifestToJson(sampleManifest()).substr(0, 60));
+	CHECK(loadManifest(t.path, "wiimc", "sd").status == LoadStatus::Corrupt);
+	CHECK(listManifests(t.path, "sd").corrupt.size() == 1);
+	CHECK(removeManifest(t.path, "wiimc") && !has(rec));
+}
+
+static void testJournal() {
+	for (JournalPhase ph : {JournalPhase::Start, JournalPhase::Commit}) {
+		Journal j = sampleJournal(ph);
+		CHECK(validateJournal(j).empty());
+		RecTemp t;
+		CHECK(loadJournal(t.path, "usb").status == LoadStatus::Missing);
+		CHECK(saveJournal(t.path, j));
+		CHECK(has(t.path + "/apps/OpenShop/installed/.journal"));
+		JournalLoad l = loadJournal(t.path, "usb");
+		CHECK(l.status == LoadStatus::Ok);
+		const Journal& r = l.journal;
+		CHECK(r.phase == ph && r.jobId == 7 && r.kind == JournalKind::Update && r.slug == "wiimc" && r.device == "usb");
+		CHECK(r.stagingDir == "apps/OpenShop/staging/7");
+		CHECK(r.ops.size() == j.ops.size() && r.step == j.step);
+		for (size_t i = 0; i < j.ops.size(); i++) {
+			CHECK(r.ops[i].type == j.ops[i].type && r.ops[i].path == j.ops[i].path && r.ops[i].other == j.ops[i].other);
+			CHECK(r.ops[i].preexisting == j.ops[i].preexisting && r.ops[i].created == j.ops[i].created);
+		}
+		// Updating the step rewrites the file.
+		if (ph == JournalPhase::Commit) {
+			j.step = 5;
+			CHECK(saveJournal(t.path, j));
+			CHECK(loadJournal(t.path, "usb").journal.step == 5);
+		}
+		CHECK(removeJournal(t.path));
+		CHECK(loadJournal(t.path, "usb").status == LoadStatus::Missing && !has(t.path + "/apps/OpenShop/installed/.journal.tmp"));
+	}
+	// Both kinds and a step of -1 (commit written, nothing done yet).
+	Journal j = sampleJournal(JournalPhase::Commit);
+	j.step = -1;
+	CHECK(parseJournal(journalToJson(j)).ok);
+	j.step = (int)j.ops.size() - 1;
+	CHECK(parseJournal(journalToJson(j)).ok);
+	j = sampleInstallJournal();
+	CHECK(validateJournal(j).empty() && parseJournal(journalToJson(j)).ok);
+	j.step = -1;
+	CHECK(parseJournal(journalToJson(j)).ok);
+}
+
+static void testJournalCorrupt() {
+	const Journal good = sampleJournal(JournalPhase::Commit);
+	const std::string text = journalToJson(good);
+	CHECK(parseJournal(text).ok);
+	int accepted = 0;
+	for (size_t n = 0; n < text.size(); n++) if (parseJournal(text.substr(0, n)).ok) accepted++;
+	CHECK(accepted == 0);
+	auto badJ = [&](Journal j) { return !validateJournal(j).empty(); };
+	Journal j = good;
+	j.jobId = -1;                     CHECK(badJ(j));
+	j = good; j.slug = "../x";        CHECK(badJ(j));
+	j = good; j.device = "nand";      CHECK(badJ(j));
+	j = good; j.stagingDir = "apps/OpenShop/staging/8"; CHECK(badJ(j));
+	j = good; j.stagingDir = "apps/OpenShop/staging/7/../x"; CHECK(badJ(j));
+	j = good; j.stagingDir = "apps/foo";  CHECK(badJ(j));
+	j = good; j.step = 7;             CHECK(badJ(j));
+	j = good; j.step = -2;            CHECK(badJ(j));
+	j = good; j.formatVersion = 2;    CHECK(badJ(j));
+	j = sampleJournal(JournalPhase::Start); j.step = 0; CHECK(badJ(j));
+	j = sampleJournal(JournalPhase::Start); j.ops.push_back(good.ops[0]); CHECK(badJ(j));
+	// Op paths: escapes, system roots, another job's staging, wrong shapes.
+	auto withOp = [&](JournalOp op) { Journal x = good; x.ops[0] = op; return validateJournal(x); };
+	JournalOp op = good.ops[0];
+	CHECK(withOp(op).empty());
+	op = good.ops[0]; op.path = "../x";                        CHECK(!withOp(op).empty());
+	op = good.ops[0]; op.path = "apps/OpenShop";               CHECK(!withOp(op).empty());
+	op = good.ops[0]; op.path = "apps/foo/bar";                CHECK(!withOp(op).empty());   // a dir op needs apps/<dir>
+	op = good.ops[0]; op.path = "private/x";                   CHECK(!withOp(op).empty());
+	op = good.ops[0]; op.path = "/apps/foo";                   CHECK(!withOp(op).empty());
+	op = good.ops[0]; op.path = "sd:/apps/foo";                CHECK(!withOp(op).empty());
+	op = good.ops[0]; op.other = "apps/OpenShop/staging/8/old/x";   CHECK(!withOp(op).empty());
+	op = good.ops[0]; op.other = "apps/OpenShop/staging/7";    CHECK(!withOp(op).empty());   // not strictly inside
+	op = good.ops[0]; op.other = "apps/OpenShop/staging/7/../8/x"; CHECK(!withOp(op).empty());
+	op = good.ops[0]; op.other = "apps/OpenShop/staging/7/a\\b";   CHECK(!withOp(op).empty());
+	op = good.ops[0]; op.other = "";                           CHECK(!withOp(op).empty());
+	op = good.ops[3]; op.other = "apps/OpenShop/staging/7/x";  CHECK(!withOp(op).empty());   // mkdir takes no other
+	op = good.ops[3]; op.path = "title/x";                     CHECK(!withOp(op).empty());
+	op = good.ops[6]; op.path = "apps/OpenShop/installed/other.json"; CHECK(!withOp(op).empty());
+	op = good.ops[5]; op.path = "apps/OpenShop/installed/.journal"; CHECK(!withOp(op).empty());
+	op = good.ops[5]; op.path = "apps/OpenShop/staging/7/x";   CHECK(!withOp(op).empty());
+	// JSON level.
+	auto badText = [](const std::string& s) { return !parseJournal(s).ok; };
+	CHECK(badText("")); CHECK(badText("[]")); CHECK(badText("{}"));
+	CHECK(badText(std::string(100000, '[')));
+	CHECK(badText(std::string(kMaxJournalBytes + 1, ' ')));
+	std::string t2 = text;
+	auto swapIn = [&](const std::string& from, const std::string& to) {
+		std::string s = t2;
+		size_t p = s.find(from);
+		if (p == std::string::npos) return std::string("?");
+		return s.replace(p, from.size(), to);
+	};
+	CHECK(parseJournal(swapIn("\"formatVersion\":1", "\"formatVersion\":1,\"extra\":{\"a\":[1]}")).ok); // unknown field ignored
+	CHECK(badText(swapIn("\"formatVersion\":1", "\"formatVersion\":2")));
+	CHECK(badText(swapIn("\"phase\":\"commit\"", "\"phase\":\"done\"")));
+	CHECK(badText(swapIn("\"kind\":\"update\"", "\"kind\":7")));
+	CHECK(badText(swapIn("\"jobId\":7", "\"jobId\":\"7\"")));
+	CHECK(badText(swapIn("\"op\":\"parkDir\"", "\"op\":\"format\"")));
+	CHECK(badText(swapIn("\"step\":3", "\"step\":99")));
+	CHECK(badText(swapIn("\"step\":3", "\"step\":\"3\"")));
+	CHECK(badText(swapIn("\"ops\":[", "\"ops\":{},\"x\":[")));
+	CHECK(badText(swapIn("\"preexisting\":true", "\"preexisting\":1")));
+	CHECK(badText(swapIn("\"slug\":\"wiimc\"", "\"slug\":\"wiimc\",\"slug\":\"x\"")));
+	{
+		std::string many = R"({"formatVersion":1,"phase":"commit","jobId":7,"kind":"install","slug":"a","device":"sd","stagingDir":"apps/OpenShop/staging/7","step":-1,"ops":[)";
+		for (size_t i = 0; i <= kMaxJournalOps; i++) many += i ? ",{\"op\":\"mkdir\",\"path\":\"c\"}" : "{\"op\":\"mkdir\",\"path\":\"c\"}";
+		many += "]}";
+		CHECK(badText(many));
+	}
+	// On disk: corrupt and oversized journals load as Corrupt (recovery must leave them), a lone .bak is found.
+	RecTemp t;
+	const std::string jp = t.path + "/apps/OpenShop/installed/.journal";
+	put(jp, text.substr(0, text.size() / 2));
+	CHECK(loadJournal(t.path, "usb").status == LoadStatus::Corrupt);
+	put(jp, std::string(kMaxJournalBytes + 1, 'x'));
+	CHECK(loadJournal(t.path, "usb").status == LoadStatus::Corrupt);
+	std::remove(jp.c_str());
+	put(jp + ".bak", text);
+	JournalLoad l = loadJournal(t.path, "usb");
+	CHECK(l.status == LoadStatus::Ok && l.fromBackup && l.journal.step == 3);
+	CHECK(removeJournal(t.path) && !has(jp + ".bak"));
+	// Save refuses an invalid journal and writes nothing.
+	Journal bad = good;
+	bad.ops[0].other = "elsewhere/x";
+	CHECK(!saveJournal(t.path, bad) && !has(jp));
+}
+
+static std::string g_crashJRoot;
+static void crashJournal() {
+	FileOps ops;
+	ops.rename = renameExitAt;
+	Journal j = sampleJournal(JournalPhase::Commit);
+	j.step = 6;
+	saveJournal(g_crashJRoot, j, ops);
+}
+
+static void testJournalCrash() {
+	for (int cut : {1, 2, 3}) {
+		RecTemp t;
+		g_crashJRoot = t.path;
+		Journal start = sampleJournal(JournalPhase::Start);
+		CHECK(saveJournal(t.path, start));
+		g_renameCalls = 0;
+		g_failAtRename = cut;
+		CHECK(runForked(crashJournal));
+		g_failAtRename = 0;
+		// Whatever the cut, the journal is readable and is the old (start) or complete new (commit) one, never a hybrid.
+		JournalLoad l = loadJournal(t.path, "usb");
+		CHECK(l.status == LoadStatus::Ok);
+		CHECK(l.journal.phase == JournalPhase::Start && l.journal.ops.empty());
+		CHECK(l.fromBackup == (cut == 3));
+	}
+	// A short write or failed fsync on the commit-phase save keeps the start-phase journal.
+	RecTemp t;
+	CHECK(saveJournal(t.path, sampleJournal(JournalPhase::Start)));
+	FileOps ops;
+	ops.write = shortWrite;
+	CHECK(!saveJournal(t.path, sampleJournal(JournalPhase::Commit), ops));
+	ops = {};
+	ops.fsync = failingFsync;
+	CHECK(!saveJournal(t.path, sampleJournal(JournalPhase::Commit), ops));
+	CHECK(loadJournal(t.path, "usb").journal.phase == JournalPhase::Start);
+	CHECK(!has(t.path + "/apps/OpenShop/installed/.journal.tmp"));
+}
+
+// ---- review fixes: identity folding, shapes, caps, bindings, consistency, cuts ---------------------------------------------
+static const std::string kEacute = "\xc3\xa9"; // e with acute
+static const std::string kEcap = "\xc3\x89";   // E with acute
+
+static std::string filesJson(const char* key, size_t n, const char* prefix) {
+	std::string s;
+	for (size_t i = 0; i < n; i++) s += std::string(i ? "," : "") + "\"" + prefix + std::to_string(i) + "\"";
+	return std::string("\"") + key + "\":[" + s + "]";
+}
+
+static void testManifestUnicodeFold() {
+	Manifest a = sampleManifest("wiimc");
+	a.files.push_back({"config/Caf" + kEacute + "/x.ini", false, true});
+	a.dirs.push_back({"apps/" + kEcap + "clair", true, false, {{"apps/" + kEacute + "clair/boot.dol"}}, {}, true});
+	validateManifest(a);
+	// The dir apps/Eclair(acute) lists a file whose dir segment is spelled in the other case: valid (FAT sees one folder).
+	CHECK(a.dirs.back().valid && a.dirs.back().files[0].valid);
+	CHECK(pathStrictlyUnder("apps/" + kEacute + "clair/boot.dol", "apps/" + kEcap + "clair"));
+	CHECK(!pathStrictlyUnder("apps/" + kEacute + "clair", "apps/" + kEcap + "clair"));
+	CHECK(!pathStrictlyUnder("apps/" + kEacute + "clairs/x", "apps/" + kEcap + "clair"));
+	Manifest b = sampleManifest("other");
+	b.dirs.clear();
+	b.dirs.push_back({"apps/" + kEacute + "clair", false, false, {}, {}, true});
+	b.files.clear();
+	b.createdDirs.clear();
+	validateManifest(b);
+	std::vector<Manifest> all{a, b};
+	CHECK(manifestsReferencing(all, "config/CAF" + kEcap + "/x.ini") == std::vector<std::string>{"wiimc"});
+	CHECK(manifestsReferencing(all, "config/caf" + kEacute + "/X.INI") == std::vector<std::string>{"wiimc"});
+	CHECK(manifestsReferencing(all, "config/caf/x.ini").empty());
+	CHECK((dirOwners(all, "apps/" + kEacute + "CLAIR") == std::vector<std::string>{"wiimc", "other"}));
+	CHECK(dirOwners(all, "apps/" + kEcap + "clair", "other") == std::vector<std::string>{"wiimc"});
+	// Merge matches the dir and dedupes files by the Unicode fold.
+	Manifest neu = sampleManifest("wiimc");
+	neu.dirs.clear();
+	neu.dirs.push_back({"apps/" + kEacute + "clair", false, false, {{"apps/" + kEacute + "clair/boot.dol"}, {"apps/" + kEacute + "clair/n.dat"}}, {}, true});
+	neu.files = {{"config/CAF" + kEcap + "/x.ini", true, true}};
+	neu.createdDirs.clear();
+	validateManifest(neu);
+	Manifest m = mergeForUpdate(&a, neu);
+	CHECK(m.dirs.size() == 2); // apps/Eclair merged with the old one, plus the old apps/WiiMC
+	CHECK(m.dirs[0].created && m.dirs[0].files.size() == 2);
+	bool found = false;
+	for (const ManifestFile& f : m.files) if (foldKeyUnicode(f.path) == foldKeyUnicode("config/caf" + kEacute + "/x.ini")) { found = true; CHECK(!f.preexisting); }
+	CHECK(found);
+	size_t cafes = 0;
+	for (const ManifestFile& f : m.files) if (foldKeyUnicode(f.path).find("caf") != std::string::npos) cafes++;
+	CHECK(cafes == 1);
+	// Round trip through disk keeps the accented names.
+	RecTemp t;
+	CHECK(saveManifest(t.path, a));
+	ManifestLoad l = loadManifest(t.path, "wiimc", "sd");
+	CHECK(l.status == LoadStatus::Ok && l.manifest.dirs.size() == 2 && l.manifest.dirs[1].valid && l.manifest.dirs[1].files[0].valid);
+	// An own-name (name == slug) adoption check is ASCII only: no accented fold of the slug.
+	Manifest un = sampleManifest("wiimc");
+	un.dirs = {{"apps/WiiMC", true, false, {{"apps/WiiMC/boot.dol"}}, {}, true}};
+	CHECK(mergeForUpdate(nullptr, un).dirs[0].adopted);
+	// The index answers the same as the one-shot queries (L1).
+	const ManifestIndex ix = buildManifestIndex(all);
+	CHECK(manifestsReferencing(ix, "CONFIG/CAF" + kEcap + "/x.ini") == manifestsReferencing(all, "CONFIG/CAF" + kEcap + "/x.ini"));
+	CHECK(dirOwners(ix, "apps/" + kEacute + "clair") == dirOwners(all, "apps/" + kEacute + "clair"));
+	CHECK(dirOwners(ix, "apps/" + kEacute + "clair", "WIIMC") == std::vector<std::string>{"other"});
+	CHECK(manifestsReferencing(ix, "nothing").empty() && dirOwners(ix, "apps/zzz").empty());
+	// A file listed twice in one manifest names the slug once.
+	Manifest dup = sampleManifest("wiimc");
+	dup.files.push_back({"config/wiimc/x.ini", false, true});
+	validateManifest(dup);
+	CHECK(manifestsReferencing(std::vector<Manifest>{dup}, "config/wiimc/x.ini").size() == 1);
+}
+
+static void testManifestCapsAndShapes() {
+	auto bad = [](const std::string& s) { return !parseManifest(s).ok; };
+	const std::string head = R"({"formatVersion":1,"slug":"a","device":"sd","dirs":[{"path":"apps/a"}],)";
+	// A junk array of many tiny values is refused before jansson allocates for it (the memory-shape check).
+	{
+		std::string junk = head + "\"x\":[";
+		for (int i = 0; i < 600000; i++) junk += i ? ",0" : "0";
+		junk += "]}";
+		CHECK(junk.size() < kMaxManifestBytes);
+		const ManifestParse p = parseManifest(junk);
+		CHECK(!p.ok && p.error.find("too many values") != std::string::npos);
+		CHECK(!rec::shapeOk(junk, 8, kMaxManifestValues));
+		CHECK(rec::shapeOk(junk, 8, 1000000));
+		CHECK(rec::shapeOk("[[[1,2],[3]],\"[[[[,,,\"]", 3, 8) && !rec::shapeOk("[[[[1]]]]", 3, 100) && !rec::shapeOk("[1,2,3]", 3, 2) && rec::shapeOk("[1,2,3]", 3, 3));
+		std::string objs = head + "\"x\":[";
+		for (int i = 0; i < 100000; i++) objs += i ? ",{}" : "{}";
+		CHECK(bad(objs + "]}"));
+	}
+	// Total paths over all arrays together: 20000 + 20000 fit, 20000 + 20001 do not.
+	CHECK(parseManifest(R"({"formatVersion":1,"slug":"a","device":"sd","dirs":[{"path":"apps/a",)" + filesJson("files", 20000, "apps/a/f") + "," +
+	                    filesJson("createdSubdirs", 20000, "apps/a/d") + "}]}").ok);
+	CHECK(bad(R"({"formatVersion":1,"slug":"a","device":"sd","dirs":[{"path":"apps/a",)" + filesJson("files", 20000, "apps/a/f") + "," +
+	          filesJson("createdSubdirs", 20001, "apps/a/d") + "}]}"));
+	CHECK(bad(R"({"formatVersion":1,"slug":"a","device":"sd","dirs":[{"path":"apps/a",)" + filesJson("files", 20000, "apps/a/f") + "}]," +
+	          filesJson("createdDirs", 20001, "c") + "}"));
+	// More than 64 dirs: refused on parse and on save; exactly 64 are fine.
+	{
+		Manifest m = sampleManifest();
+		m.dirs.clear();
+		for (int i = 0; i < 64; i++) m.dirs.push_back({"apps/d" + std::to_string(i), true, false, {}, {}, true});
+		RecTemp t;
+		CHECK(saveManifest(t.path, m) && loadManifest(t.path, "wiimc", "sd").manifest.dirs.size() == 64);
+		m.dirs.push_back({"apps/d64", true, false, {}, {}, true});
+		CHECK(!saveManifest(t.path, m));
+		std::string text = head.substr(0, head.find("\"dirs\"")) + "\"dirs\":[";
+		for (int i = 0; i < 65; i++) text += std::string(i ? "," : "") + "{\"path\":\"apps/d" + std::to_string(i) + "\"}";
+		CHECK(bad(text + "]}"));
+	}
+	// Memory at the cap: 40000 file entries (the most values per path) save and load; more paths or bytes are refused on save.
+	{
+		RecTemp t;
+		Manifest m = sampleManifest();
+		m.files.clear();
+		m.createdDirs.clear();
+		for (size_t i = 0; i < kMaxManifestPaths - 3; i++) m.files.push_back({"config/f/" + std::to_string(i), i % 2 == 0, true});
+		CHECK(manifestPathCount(m) == kMaxManifestPaths);
+		const std::string json = manifestToJson(m);
+		CHECK(json.size() < kMaxManifestBytes && manifestSaveProblem(m).empty());
+		CHECK(saveManifest(t.path, m));
+		ManifestLoad l = loadManifest(t.path, "wiimc", "sd");
+		CHECK(l.status == LoadStatus::Ok && manifestPathCount(l.manifest) == kMaxManifestPaths && l.bytes == json.size());
+		m.files.push_back({"config/f/over", false, true});
+		CHECK(!manifestSaveProblem(m).empty() && !saveManifest(t.path, m));
+		// Long paths: 40000 x ~110 bytes is over the byte cap, refused at plan time.
+		Manifest fat = sampleManifest();
+		fat.createdDirs.clear();
+		for (size_t i = 0; i < kMaxManifestPaths - 6; i++) fat.createdDirs.push_back({"config/" + std::string(100, 'x') + std::to_string(i), true});
+		const std::string why = manifestSaveProblem(fat);
+		CHECK(why.find("bytes") != std::string::npos);
+		CHECK(loadManifest(t.path, "wiimc", "sd").status == LoadStatus::Ok); // the earlier record is untouched
+	}
+	// listManifests is bounded in total: five manifests of 40000 paths fit the 200000 cap, the sixth is not kept.
+	{
+		RecTemp t;
+		for (int i = 0; i < 6; i++) {
+			Manifest m = sampleManifest("m" + std::to_string(i));
+			m.files.clear();
+			m.createdDirs.clear();
+			for (int k = 0; k < 39997; k++) m.createdDirs.push_back({"config/d" + std::to_string(k), true});
+			CHECK(manifestPathCount(m) == kMaxManifestPaths && saveManifest(t.path, m));
+		}
+		const ManifestList ml = listManifests(t.path, "sd");
+		CHECK(ml.listed && ml.truncated && ml.manifests.size() == 5);
+	}
+}
+
+static void testManifestSaveValidation() {
+	RecTemp t;
+	// M7: a dirs[].files path over the 1024-byte read cap would save fine and then never load. It is refused up front.
+	Manifest m = sampleManifest();
+	m.dirs[0].files.push_back({"apps/WiiMC/" + std::string(1089, 'a')});
+	CHECK(!manifestSaveProblem(m).empty() && !saveManifest(t.path, m) && !has(t.path + "/apps/OpenShop/installed/wiimc.json"));
+	CHECK(!parseManifest(manifestToJson(m)).ok);
+	// Invalid UTF-8 is an error, not a silently dropped field.
+	m = sampleManifest();
+	m.files.push_back({"config/bad\xff" "name", false, true});
+	CHECK(manifestToJson(m).empty() && !saveManifest(t.path, m));
+	m = sampleManifest();
+	m.version = "1.\xc3";
+	CHECK(manifestToJson(m).empty() && !saveManifest(t.path, m));
+	// An embedded NUL cannot round trip.
+	m = sampleManifest();
+	m.files.push_back({std::string("config/a\0b", 10), false, true});
+	CHECK(!saveManifest(t.path, m));
+	// No dirs: refused.
+	m = sampleManifest();
+	m.dirs.clear();
+	CHECK(!saveManifest(t.path, m));
+	// Duplicate dirs: refused.
+	m = sampleManifest();
+	m.dirs.push_back({"apps/wiimc", true, false, {}, {}, true});
+	CHECK(!saveManifest(t.path, m));
+	CHECK(!has(t.path + "/apps/OpenShop/installed/wiimc.json"));
+
+	// M8: the plan-time dry run of the merge. 30000 old + 20000 new outside files are over the 40000 cap up front.
+	Manifest old = sampleManifest("wiimc");
+	old.files.clear();
+	for (int i = 0; i < 30000; i++) old.files.push_back({"config/old/f" + std::to_string(i), false, true});
+	Manifest neu = sampleManifest("wiimc");
+	neu.files.clear();
+	for (int i = 0; i < 20000; i++) neu.files.push_back({"config/new/f" + std::to_string(i), false, true});
+	validateManifest(old);
+	validateManifest(neu);
+	CHECK(!dryRunMerge(&old, neu).empty());
+	CHECK(dryRunMerge(nullptr, neu).empty());
+	// With an exists predicate the old extras that are gone from the disk drop out, and it fits.
+	size_t asked = 0;
+	ExistsFn gone = [&](const std::string&) { asked++; return false; };
+	CHECK(dryRunMerge(&old, neu, gone).empty() && asked >= 30000);
+	Manifest merged = mergeForUpdate(&old, neu, gone);
+	CHECK(merged.files.size() == 20000);
+	ExistsFn onlyEven = [](const std::string& p) { return std::stoi(p.substr(p.rfind('f') + 1)) % 2 == 0 || p.find("old") == std::string::npos; };
+	merged = mergeForUpdate(&old, neu, onlyEven);
+	CHECK(merged.files.size() == 20000 + 15000);
+	// The predicate never drops what the new manifest has, nor old entries it finds; sampleManifest's old lists are kept.
+	Manifest o2 = sampleManifest("wiimc");
+	Manifest n2 = sampleManifest("wiimc");
+	n2.dirs[0].files = {{"apps/WiiMC/boot.dol"}};
+	ExistsFn none = [](const std::string&) { return false; };
+	merged = mergeForUpdate(&o2, n2, none);
+	CHECK(merged.dirs[0].files.size() == 1 && merged.dirs[0].files[0].path == "apps/WiiMC/boot.dol");
+	merged = mergeForUpdate(&o2, n2);
+	CHECK(merged.dirs[0].files.size() == 2);
+	// The merge of a duplicate-free pair that would fit is clean.
+	CHECK(dryRunMerge(&o2, n2).empty());
+}
+
+static void testManifestDeviceAndFlags() {
+	RecTemp t;
+	Manifest m = sampleManifest("wiimc"); // device "sd"
+	CHECK(saveManifest(t.path, m));
+	CHECK(loadManifest(t.path, "wiimc", "sd").status == LoadStatus::Ok);
+	ManifestLoad l = loadManifest(t.path, "wiimc", "usb");
+	CHECK(l.status == LoadStatus::Corrupt && l.error.find("device") != std::string::npos);
+	ManifestList ml = listManifests(t.path, "usb");
+	CHECK(ml.manifests.empty() && ml.corrupt.size() == 1);
+	ml = listManifests(t.path, "sd");
+	CHECK(ml.manifests.size() == 1 && ml.corrupt.empty());
+	// A journal for the other device is Corrupt too.
+	Journal j = sampleJournal(JournalPhase::Commit); // device "usb"
+	CHECK(saveJournal(t.path, j));
+	CHECK(loadJournal(t.path, "usb").status == LoadStatus::Ok);
+	JournalLoad jl = loadJournal(t.path, "sd");
+	CHECK(jl.status == LoadStatus::Corrupt && jl.error.find("device") != std::string::npos);
+	// Both the record and a stale .bak present: the record wins, and loading does not need the .bak.
+	const std::string rec = t.path + "/apps/OpenShop/installed/wiimc.json";
+	Manifest stale = sampleManifest("wiimc");
+	stale.version = "STALE";
+	put(rec + ".bak", manifestToJson(stale));
+	l = loadManifest(t.path, "wiimc", "sd");
+	CHECK(l.status == LoadStatus::Ok && !l.fromBackup && l.manifest.version == "1.2.3");
+	ml = listManifests(t.path, "sd");
+	CHECK(ml.manifests.size() == 1 && ml.manifests[0].version == "1.2.3");
+	// Root-level files (a single segment) are never valid in files[], dirs[].files or journal file ops; createdDirs may be.
+	m = sampleManifest();
+	m.files = {{"boot.elf", false, true}, {"autoexec.bin", true, true}, {"config/ok.ini", false, true}};
+	m.createdDirs = {{"config"}};
+	validateManifest(m);
+	CHECK(!m.files[0].valid && !m.files[1].valid && m.files[2].valid && m.createdDirs[0].valid);
+	CHECK(manifestsReferencing(std::vector<Manifest>{m}, "boot.elf").empty());
+}
+
+static void testJournalBindings() {
+	const Journal good = sampleJournal(JournalPhase::Commit);
+	CHECK(validateJournal(good).empty());
+	auto with = [&](size_t i, auto edit) { Journal j = good; edit(j.ops[i]); return validateJournal(j); };
+	const std::string S = "apps/OpenShop/staging/7";
+	// M3: `other` is bound to the job and the path.
+	CHECK(!with(1, [&](JournalOp& o) { o.other = S + "/root/apps/Other"; }).empty());          // renameDir: another path's staging
+	CHECK(!with(1, [&](JournalOp& o) { o.other = S + "/old/apps/WiiMC"; }).empty());           // renameDir out of old/
+	CHECK(!with(1, [&](JournalOp& o) { o.other = "apps/OpenShop/staging/8/root/apps/WiiMC"; }).empty());
+	CHECK(!with(0, [&](JournalOp& o) { o.other = S + "/old/WiiMC"; }).empty());                // the old layout
+	CHECK(!with(0, [&](JournalOp& o) { o.other = S + "/root/apps/WiiMC"; }).empty());          // parkDir from root/
+	CHECK(!with(2, [&](JournalOp& o) { o.other = S + "/old/apps/WiiMC/other.cfg"; }).empty()); // restoreFile of another file
+	CHECK(!with(4, [&](JournalOp& o) { o.other = S + "/old/config/wiimc/y.ini"; }).empty());   // parkFile
+	CHECK(!with(5, [&](JournalOp& o) { o.other = S + "/root/config/wiimc/y.ini"; }).empty());  // writeFile
+	CHECK(!with(5, [&](JournalOp& o) { o.other = S + "/old/config/wiimc/x.ini"; }).empty());   // writeFile out of old/
+	CHECK(!with(6, [&](JournalOp& o) { o.other = S + "/root/manifest.json"; }).empty());       // writeManifest
+	CHECK(!with(6, [&](JournalOp& o) { o.other = ""; }).empty());
+	CHECK(!with(6, [&](JournalOp& o) { o.other = "apps/OpenShop/staging/8/manifest.json"; }).empty());
+	CHECK(with(6, [&](JournalOp& o) { o.path = "apps/OpenShop/installed/WIIMC.json"; }).empty());
+	CHECK(stagedRootPath(S, "apps/a") == S + "/root/apps/a" && stagedOldPath(S, "x/y") == S + "/old/x/y" && stagedManifestPath(S) == S + "/manifest.json");
+	// M2: file ops need two or more segments; mkdir may be one.
+	CHECK(!with(5, [&](JournalOp& o) { o.path = "boot.elf"; o.other = S + "/root/boot.elf"; }).empty());
+	CHECK(!with(5, [&](JournalOp& o) { o.path = "autoexec.bin"; o.other = S + "/root/autoexec.bin"; }).empty());
+	CHECK(!with(4, [&](JournalOp& o) { o.path = "boot.elf"; o.other = S + "/old/boot.elf"; }).empty());
+	CHECK(!with(2, [&](JournalOp& o) { o.path = "boot.elf"; o.other = S + "/old/boot.elf"; }).empty());
+	CHECK(with(3, [&](JournalOp& o) { o.path = "config"; }).empty());
+	CHECK(with(3, [&](JournalOp& o) { o.path = "apps/WiiMC/sub/deeper"; }).empty()); // a folder below the new app dir
+	// writeFile is for paths outside apps/ only.
+	CHECK(!with(5, [&](JournalOp& o) { o.path = "apps/WiiMC/x.bin"; o.other = S + "/root/apps/WiiMC/x.bin"; }).empty());
+	// Carry-over: a whole subfolder is one plain restoreFile (path is a folder), as is parkFile of a folder.
+	{
+		Journal j = good;
+		j.ops.insert(j.ops.begin() + 3, {OpType::RestoreFile, "apps/WiiMC/saves", S + "/old/apps/WiiMC/saves", false, false});
+		j.ops.insert(j.ops.begin() + 4, {OpType::Mkdir, "apps/WiiMC/skins", "", false, true});
+		CHECK(validateJournal(j).empty() && parseJournal(journalToJson(j)).ok);
+	}
+	// M4: writeFile needs the preexisting key; JournalOp defaults to the safe value.
+	CHECK(JournalOp{}.preexisting && !JournalOp{}.created);
+	std::string text = journalToJson(good);
+	const size_t at = text.find(",\"preexisting\":true");
+	CHECK(at != std::string::npos);
+	if (at != std::string::npos) {
+		std::string without = text;
+		without.erase(at, std::string(",\"preexisting\":true").size());
+		CHECK(parseJournal(text).ok && !parseJournal(without).ok);
+		std::string wrong = text;
+		wrong.replace(at, std::string(",\"preexisting\":true").size(), ",\"preexisting\":\"yes\"");
+		CHECK(!parseJournal(wrong).ok);
+	}
+	// A parsed non-writeFile op reports the plain defaults.
+	const Journal back = parseJournal(text).journal;
+	CHECK(back.ops[0].preexisting == false && back.ops[5].preexisting == true);
+}
+
+static void testJournalConsistency() {
+	const std::string S = "apps/OpenShop/staging/7";
+	const Journal good = sampleJournal(JournalPhase::Commit);
+	// L2: kind and order.
+	Journal j = good;
+	j.kind = JournalKind::Install;
+	CHECK(!validateJournal(j).empty());                                  // parkDir and restoreFile in an install
+	CHECK(validateJournal(sampleInstallJournal()).empty());
+	j = sampleInstallJournal();
+	j.ops.insert(j.ops.begin(), {OpType::ParkDir, "apps/foo", stagedOldPath(j.stagingDir, "apps/foo"), false, false});
+	CHECK(!validateJournal(j).empty());
+	j = sampleInstallJournal();
+	j.ops.erase(j.ops.begin() + 5);                                      // the writeFile{preexisting:true} lost its parkFile
+	CHECK(!validateJournal(j).empty());
+	j = sampleInstallJournal();
+	j.ops[5].path = "config/other.ini";
+	j.ops[5].other = stagedOldPath(j.stagingDir, "config/other.ini");   // parked a different file
+	CHECK(!validateJournal(j).empty());
+	j = sampleInstallJournal();
+	std::swap(j.ops[5], j.ops[6]);                                       // the park comes after the write
+	CHECK(!validateJournal(j).empty());
+	j = good;
+	j.ops.erase(j.ops.begin() + 1);                                      // parkDir without a renameDir
+	j.step = -1;
+	CHECK(!validateJournal(j).empty());
+	j = good;
+	std::swap(j.ops[1], j.ops[2]);                                       // restoreFile before the renameDir
+	CHECK(!validateJournal(j).empty());
+	j = good;
+	j.ops.erase(j.ops.begin());                                          // restoreFile without a parked dir
+	j.step = -1;
+	CHECK(!validateJournal(j).empty());
+	j = good;
+	std::swap(j.ops[0], j.ops[1]);                                       // renameDir before its parkDir
+	CHECK(!validateJournal(j).empty());
+	// writeManifest: exactly one, last.
+	j = good;
+	std::swap(j.ops[5], j.ops[6]);
+	CHECK(!validateJournal(j).empty());
+	j = good;
+	j.ops.push_back(j.ops.back());
+	CHECK(!validateJournal(j).empty());
+	j = good;
+	j.ops.pop_back();
+	j.step = 2;
+	CHECK(!validateJournal(j).empty());
+	j = good;
+	j.ops.clear();
+	j.step = -1;
+	CHECK(!validateJournal(j).empty());
+	// A restoreFile of a path outside every parked app dir.
+	j = good;
+	j.ops[2].path = "apps/Other/user.cfg";
+	j.ops[2].other = stagedOldPath(S, "apps/Other/user.cfg");
+	CHECK(!validateJournal(j).empty());
+	// Updates may rename a new dir with no park (the update adds another dir).
+	j = good;
+	j.ops.insert(j.ops.begin() + 2, {OpType::RenameDir, "apps/Second", stagedRootPath(S, "apps/Second"), false, false});
+	CHECK(validateJournal(j).empty());
+}
+
+static void testJournalSizeAndFlush() {
+	// Flush policy (H2): dir-level ops always, others every kJournalFlushEvery.
+	CHECK(isDirLevelOp(OpType::RenameDir) && isDirLevelOp(OpType::ParkDir) && isDirLevelOp(OpType::WriteManifest));
+	CHECK(!isDirLevelOp(OpType::WriteFile) && !isDirLevelOp(OpType::Mkdir) && !isDirLevelOp(OpType::ParkFile) && !isDirLevelOp(OpType::RestoreFile));
+	CHECK(journalFlushDue(OpType::RenameDir, 1) && journalFlushDue(OpType::ParkDir, 1));
+	CHECK(!journalFlushDue(OpType::WriteFile, 1) && !journalFlushDue(OpType::WriteFile, kJournalFlushEvery - 1));
+	CHECK(journalFlushDue(OpType::WriteFile, kJournalFlushEvery) && kJournalFlushEvery == 32);
+	// Plan-time fit: ops over the cap, and bytes over the cap.
+	auto manyOps = [](size_t n, size_t pad) {
+		Journal j = sampleInstallJournal();
+		const JournalOp last = j.ops.back();
+		j.ops.clear();
+		for (size_t i = 0; i < n; i++) j.ops.push_back({OpType::Mkdir, "config/" + std::string(pad, 'a') + std::to_string(i), "", false, true});
+		j.ops.push_back(last);
+		j.step = -1;
+		return j;
+	};
+	CHECK(journalSaveProblem(manyOps(100, 10)).empty());
+	CHECK(journalSaveProblem(manyOps(kMaxJournalOps, 5)).find("too many") != std::string::npos);
+	CHECK(journalSaveProblem(manyOps(kMaxJournalOps - 1, 5)).empty() || journalSaveProblem(manyOps(kMaxJournalOps - 1, 5)).find("bytes") != std::string::npos);
+	const std::string why = journalSaveProblem(manyOps(kMaxJournalOps - 1, 190));
+	CHECK(why.find("bytes") != std::string::npos);
+	RecTemp t;
+	CHECK(!saveJournal(t.path, manyOps(kMaxJournalOps - 1, 190)) && !has(t.path + "/apps/OpenShop/installed/.journal"));
+	// A journal at a legal size round trips (memory at the cap: the biggest legal one still loads).
+	{
+		Journal big = manyOps(kMaxJournalOps - 1, 5);
+		if (journalSaveProblem(big).empty()) {
+			CHECK(saveJournal(t.path, big));
+			JournalLoad l = loadJournal(t.path, "sd");
+			CHECK(l.status == LoadStatus::Ok && l.journal.ops.size() == kMaxJournalOps);
+		}
+	}
+	// Junk array in a journal is refused by the value pre-scan.
+	std::string junk = R"({"formatVersion":1,"phase":"start","jobId":7,"kind":"install","slug":"a","device":"sd","stagingDir":"apps/OpenShop/staging/7","x":[)";
+	for (int i = 0; i < 400000; i++) junk += i ? ",0" : "0";
+	junk += "]}";
+	CHECK(junk.size() < kMaxJournalBytes && !parseJournal(junk).ok);
+	// Invalid UTF-8 in a field is a failed serialisation, never a dropped field.
+	Journal u = sampleInstallJournal();
+	u.slug = "a\xff";
+	CHECK(!journalSaveProblem(u).empty() && !saveJournal(t.path, u));
+}
+
+static std::string g_cutRoot;
+static int g_removeCalls = 0, g_failAtRemove = 0;
+static int removeExitAt(const char* p) {
+	if (++g_removeCalls == g_failAtRemove) _Exit(0); // power cut right before this remove
+	return std::remove(p);
+}
+static size_t writeThenExit(const void* d, size_t n, std::FILE* f) {
+	std::fwrite(d, 1, n / 2, f);
+	std::fflush(f);
+	_Exit(0); // power cut half way through the data
+}
+static void crashRemoveManifest() {
+	FileOps ops;
+	ops.remove = removeExitAt;
+	removeManifest(g_cutRoot, "wiimc", ops);
+}
+static void crashRemoveJournal() {
+	FileOps ops;
+	ops.remove = removeExitAt;
+	removeJournal(g_cutRoot, ops);
+}
+static void crashSaveDuringWrite() {
+	FileOps ops;
+	ops.write = writeThenExit;
+	Manifest m = sampleManifest();
+	m.version = "NEW";
+	saveManifest(g_cutRoot, m, ops);
+}
+static void crashSaveAtRemove() {
+	FileOps ops;
+	ops.remove = removeExitAt;
+	Manifest m = sampleManifest();
+	m.version = "NEW";
+	saveManifest(g_cutRoot, m, ops);
+}
+
+static void testRecordCuts() {
+	// M6: removing a record deletes .bak, .tmp, then the record. A cut anywhere leaves the real record readable, never only
+	// a stale .bak that would be loaded in its place.
+	for (int cut : {1, 2, 3}) {
+		RecTemp t;
+		g_cutRoot = t.path;
+		Manifest cur = sampleManifest();
+		cur.version = "CUR";
+		const std::string rec = t.path + "/apps/OpenShop/installed/wiimc.json";
+		CHECK(saveManifest(t.path, cur));
+		Manifest stale = sampleManifest();
+		stale.version = "STALE";
+		put(rec + ".bak", manifestToJson(stale));
+		put(rec + ".tmp", "half");
+		g_removeCalls = 0;
+		g_failAtRemove = cut;
+		CHECK(runForked(crashRemoveManifest));
+		g_failAtRemove = 0;
+		ManifestLoad l = loadManifest(t.path, "wiimc", "sd");
+		CHECK(l.status == LoadStatus::Ok && !l.fromBackup && l.manifest.version == "CUR");
+		CHECK(has(rec + ".bak") == (cut < 2) && has(rec + ".tmp") == (cut < 3));
+		CHECK(removeManifest(t.path, "wiimc") && loadManifest(t.path, "wiimc", "sd").status == LoadStatus::Missing);
+	}
+	// The same for the journal.
+	for (int cut : {1, 2, 3}) {
+		RecTemp t;
+		g_cutRoot = t.path;
+		Journal cur = sampleJournal(JournalPhase::Commit);
+		cur.step = 4;
+		CHECK(saveJournal(t.path, cur));
+		const std::string jp = t.path + "/apps/OpenShop/installed/.journal";
+		Journal stale = sampleJournal(JournalPhase::Start);
+		put(jp + ".bak", journalToJson(stale));
+		put(jp + ".tmp", "half");
+		g_removeCalls = 0;
+		g_failAtRemove = cut;
+		CHECK(runForked(crashRemoveJournal));
+		g_failAtRemove = 0;
+		JournalLoad l = loadJournal(t.path, "usb");
+		CHECK(l.status == LoadStatus::Ok && !l.fromBackup && l.journal.phase == JournalPhase::Commit && l.journal.step == 4);
+	}
+	// A cut half way through the data write: the old record stays, the half tmp is never read, the next save wins.
+	{
+		RecTemp t;
+		g_cutRoot = t.path;
+		Manifest old = sampleManifest();
+		old.version = "OLD";
+		CHECK(saveManifest(t.path, old));
+		CHECK(runForked(crashSaveDuringWrite));
+		const std::string rec = t.path + "/apps/OpenShop/installed/wiimc.json";
+		CHECK(has(rec + ".tmp"));
+		ManifestLoad l = loadManifest(t.path, "wiimc", "sd");
+		CHECK(l.status == LoadStatus::Ok && l.manifest.version == "OLD" && !l.fromBackup);
+		ManifestList ml = listManifests(t.path, "sd");
+		CHECK(ml.manifests.size() == 1 && ml.corrupt.empty());
+		old.version = "AFTER";
+		CHECK(saveManifest(t.path, old) && loadManifest(t.path, "wiimc", "sd").manifest.version == "AFTER" && !has(rec + ".tmp"));
+	}
+	// A cut in the save's own cleanup (the remove of a stale .bak after the rename): the NEW record is in place, and it wins.
+	{
+		RecTemp t;
+		g_cutRoot = t.path;
+		Manifest old = sampleManifest();
+		old.version = "OLD";
+		CHECK(saveManifest(t.path, old));
+		const std::string rec = t.path + "/apps/OpenShop/installed/wiimc.json";
+		put(rec + ".bak", manifestToJson(old));
+		g_removeCalls = 0;
+		g_failAtRemove = 1;
+		CHECK(runForked(crashSaveAtRemove));
+		g_failAtRemove = 0;
+		ManifestLoad l = loadManifest(t.path, "wiimc", "sd");
+		CHECK(l.status == LoadStatus::Ok && !l.fromBackup && l.manifest.version == "NEW" && has(rec + ".bak"));
+		CHECK(saveManifest(t.path, old) && !has(rec + ".bak"));
+	}
+	// A cut during the journal write keeps the previous journal.
+	{
+		RecTemp t;
+		CHECK(saveJournal(t.path, sampleJournal(JournalPhase::Start)));
+		g_cutRoot = t.path;
+		struct L { static void body() {
+			FileOps ops;
+			ops.write = writeThenExit;
+			saveJournal(g_cutRoot, sampleJournal(JournalPhase::Commit), ops);
+		} };
+		CHECK(runForked(&L::body));
+		JournalLoad l = loadJournal(t.path, "usb");
+		CHECK(l.status == LoadStatus::Ok && l.journal.phase == JournalPhase::Start);
+	}
+}
+
 int main() {
 	testMd5Vectors();
 	testMd5Chunked();
@@ -721,5 +1930,22 @@ int main() {
 	testSlugPaths();
 	testVersions();
 	testMetaXml();
+	testManifestRoundTrip();
+	testManifestCorrupt();
+	testManifestPathFlags();
+	testManifestQueries();
+	testMergeForUpdate();
+	testRecordWrites();
+	testJournal();
+	testJournalCorrupt();
+	testJournalCrash();
+	testManifestUnicodeFold();
+	testManifestCapsAndShapes();
+	testManifestSaveValidation();
+	testManifestDeviceAndFlags();
+	testJournalBindings();
+	testJournalConsistency();
+	testJournalSizeAndFlush();
+	testRecordCuts();
 	return checkReport("install_test");
 }

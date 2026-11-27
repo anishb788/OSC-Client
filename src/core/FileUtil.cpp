@@ -92,11 +92,13 @@ bool commitFile(const std::string& tmp, const std::string& to, const FileOps& op
 	return true;
 }
 
-bool writeFileAtomic(const std::string& path, const std::string& data, const FileOps& ops, bool keepBackup) {
+bool writeFileAtomic(const std::string& path, const std::string& data, const FileOps& ops, bool keepBackup, bool syncData) {
 	const std::string tmp = path + ".tmp";
 	std::FILE* f = std::fopen(tmp.c_str(), "wb");
 	if (!f) return false;
-	bool ok = data.empty() || std::fwrite(data.data(), 1, data.size(), f) == data.size();
+	bool ok = data.empty() || (ops.write ? ops.write(data.data(), data.size(), f)
+	                                     : std::fwrite(data.data(), 1, data.size(), f)) == data.size();
+	if (ok && syncData && !(ops.fsync ? ops.fsync(f) : fsyncFile(f))) ok = false;
 	// fclose flushes, so a full card can surface here rather than in fwrite.
 	if (std::fclose(f) != 0) ok = false;
 	if (ok && commitFile(tmp, path, ops, keepBackup)) return true;

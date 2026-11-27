@@ -42,6 +42,10 @@ struct FileOps {
 	// Test hook only: the descriptor-based removeTree walk (PC, no stat/list/remove/rmdir injected) calls it after it has
 	// listed `dir` and before it touches the entries, so a test can swap an entry for a symlink at the worst moment.
 	void (*walkHook)(const std::string& dir) = nullptr;
+	// writeFileAtomic only (tests): the fwrite of the data (a short count is a failed write), and the fsync before the rename
+	// (false is a failed fsync).
+	size_t (*write)(const void* data, size_t n, std::FILE* f) = nullptr;
+	bool (*fsync)(std::FILE* f) = nullptr;
 };
 
 // Moves the finished tmp file over `to`. Without `keepBackup` a plain rename is tried first and the backup dance only
@@ -51,8 +55,11 @@ struct FileOps {
 // `to` now holds the new content.
 bool commitFile(const std::string& tmp, const std::string& to, const FileOps& ops = {}, bool keepBackup = false);
 
-// Writes `data` to "<path>.tmp" and commits it over `path`. The tmp is removed again on failure.
-bool writeFileAtomic(const std::string& path, const std::string& data, const FileOps& ops = {}, bool keepBackup = false);
+// Writes `data` to "<path>.tmp" and commits it over `path`. The tmp is removed again on failure. With `syncData` the tmp is
+// fsynced (fsyncFile) before the rename, so after a power cut `path` is the old or the complete new content (the install
+// records, Increment 5).
+bool writeFileAtomic(const std::string& path, const std::string& data, const FileOps& ops = {}, bool keepBackup = false,
+                     bool syncData = false);
 
 // Reads the whole file with one fread after fseek/ftell. A file larger than `maxBytes` is refused before anything is
 // allocated (the SD card is untrusted input). `out` is empty unless the result is Ok.

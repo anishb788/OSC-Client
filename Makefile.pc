@@ -131,7 +131,7 @@ SRCS_icon_test           := $(ICONSRCS)
 LIBS_icon_test           := $(SDLLIBS) $(shell pkg-config --libs SDL2_image) -lz
 
 # M3: the pure install modules. MD5 is the vendored C file; libzip is linked from Increment 1 (zip_libzip_version).
-SRCS_install_test        := src/third_party/md5/md5.c src/install/AppsDevice.cpp src/install/Version.cpp src/install/MetaXml.cpp src/core/FileUtil.cpp src/core/DevOptions.cpp src/catalog/OscApi.cpp src/catalog/Catalog.cpp src/core/NameRules.cpp src/install/Rules.cpp src/catalog/ArchiveUrl.cpp
+SRCS_install_test        := src/third_party/md5/md5.c src/install/AppsDevice.cpp src/install/Version.cpp src/install/MetaXml.cpp src/core/FileUtil.cpp src/core/DevOptions.cpp src/catalog/OscApi.cpp src/catalog/Catalog.cpp src/core/NameRules.cpp src/install/Rules.cpp src/catalog/ArchiveUrl.cpp src/install/Manifest.cpp src/install/Journal.cpp src/install/RecordIo.cpp
 LIBS_install_test        := $(shell pkg-config --libs libzip) $(JANSSONLIBS)
 SRCS_fileutil_test       := src/core/FileUtil.cpp
 # M3 Increment 4: ZipExtract against libzip (fixtures are built at run time with libzip's writer).

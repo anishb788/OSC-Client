@@ -130,7 +130,7 @@ SRCS_icon_test           := $(ICONSRCS)
 LIBS_icon_test           := $(SDLLIBS) $(shell pkg-config --libs SDL2_image) -lz
 
 # M3: the pure install modules. MD5 is the vendored C file; libzip is linked from Increment 1 (zip_libzip_version).
-SRCS_install_test        := src/third_party/md5/md5.c
+SRCS_install_test        := src/third_party/md5/md5.c src/install/AppsDevice.cpp src/core/FileUtil.cpp src/core/DevOptions.cpp
 LIBS_install_test        := $(shell pkg-config --libs libzip)
 SRCS_fileutil_test       := src/core/FileUtil.cpp
 

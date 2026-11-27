@@ -19,6 +19,7 @@
 #include "core/Log.h"
 #include "core/PathRoot.h"
 #include "core/StackProbe.h"
+#include "install/AppsDevice.h" // deviceId / deviceLabel: the one spelling of "sd" / "usb" / "SD card" / "USB drive"
 
 #ifdef __wii__
 #include <fat.h>
@@ -145,14 +146,16 @@ long long rootFreeMB(const std::string& root) {
 // The roots with their current state. Wii: sd and usb, always both. PC: sd, and usb only if its folder exists.
 std::vector<StorageRoot> probeRoots() {
 	std::vector<StorageRoot> r;
+	const std::string sdId = install::deviceId(install::Device::Sd), usbId = install::deviceId(install::Device::Usb);
+	const std::string sdLabel = install::deviceLabel(install::Device::Sd), usbLabel = install::deviceLabel(install::Device::Usb);
 #ifdef __wii__
-	r.push_back({"sd", "SD card", "sd:", false, false});
-	r.push_back({"usb", "USB drive", "usb:", false, false});
+	r.push_back({sdId, sdLabel, "sd:", false, false});
+	r.push_back({usbId, usbLabel, "usb:", false, false});
 #else
 	const char* sd = std::getenv("OPENSHOP_SD");
 	const char* usb = std::getenv("OPENSHOP_USB");
-	r.push_back({"sd", "SD card", sd && *sd ? sd : "./sdcard", false, false});
-	StorageRoot u{"usb", "USB drive", usb && *usb ? usb : "./usbdrive", false, false};
+	r.push_back({sdId, sdLabel, sd && *sd ? sd : "./sdcard", false, false});
+	StorageRoot u{usbId, usbLabel, usb && *usb ? usb : "./usbdrive", false, false};
 	if (dirOpens(u.root)) r.push_back(u);
 #endif
 	for (StorageRoot& s : r) {
@@ -197,7 +200,7 @@ void mountStorage() {
 	logRoots("before mount", roots, freeMB);
 #ifdef __wii__
 	bool initDefaultRan = false;
-	const StorageRoot* sd = findRoot(roots, "sd");
+	const StorageRoot* sd = findRoot(roots, install::deviceId(install::Device::Sd));
 	if (!sd || !sd->mounted) {
 		const uint32_t t0 = SDL_GetTicks();
 		const bool ok = fatInitDefault();
@@ -205,14 +208,15 @@ void mountStorage() {
 		LOG("storage: fatInitDefault() -> %d in %u ms", ok ? 1 : 0, (unsigned)(SDL_GetTicks() - t0));
 		roots = probeRoots();
 	}
-	const StorageRoot* usb = findRoot(roots, "usb");
+	const StorageRoot* usb = findRoot(roots, install::deviceId(install::Device::Usb));
 	if (usb && !usb->mounted) {
 		if (initDefaultRan) {
 			// libfat's fatInitDefault() already probed USB (see the RECORDED RESULTS above), so that was the attempt.
 			LOG("storage: usb: not mounted after fatInitDefault(), which already tried it; not trying again");
 		} else {
 			// ONE attempt at startup, no retry loop: a drive that is not ready now is treated as absent for this session.
-			// A later increment (2b, when the user picks USB as the apps device) may retry once at that moment.
+			// 2b does not retry either: the mount state is fixed for the session (picking USB in "Show apps on" only
+			// works if the drive was mounted at start-up).
 			const uint32_t t0 = SDL_GetTicks();
 			const bool ok = fatMountSimple("usb", &__io_usbstorage);
 			LOG("storage: fatMountSimple(usb) -> %d in %u ms", ok ? 1 : 0, (unsigned)(SDL_GetTicks() - t0));

@@ -13,6 +13,7 @@
 #include "gfx/Gfx.h"
 #include "gfx/IconCache.h"
 #include "gfx/Text.h"
+#include "install/AppsDevice.h"
 #include "net/NetSelfTest.h"
 #include "net/Worker.h"
 #include "ui/Ui.h"
@@ -116,6 +117,22 @@ public:
 	// is open. A Refresh within kRefreshMinIntervalSec of the last successful fetch skips the network but takes the
 	// same route. Returns true if the refresh started.
 	bool refreshCatalog();
+	// "Show apps on" (Increment 2b). The root of the device apps are shown from and installed to this session ("" = no SD
+	// card and no USB drive: installs are refused). Replaces any argv[0]-derived install root. By value: never concatenate
+	// onto an empty root (check hasAppsDevice()), and copy it into the JobSpec at queue time.
+	std::string appsRoot() const { return appsDevice_.root(); }
+	bool hasAppsDevice() const { return appsDevice_.hasAppsDevice(); }
+	unsigned appsDeviceEpoch() const { return appsDevice_.epoch(); }
+	install::Device appsDevice() const { return appsDevice_.resolved(); }
+	install::Device savedAppsDevice() const { return appsDevice_.saved(); }
+	install::Fallback appsDeviceFallback() const { return appsDevice_.fallback(); }
+	// Saves the choice and switches to it. Refused (with a UI-ready `reason`) while a job is queued or running (Increment 7
+	// replaces the busy placeholder with Jobs::busy) or when the device is not mounted. SwitchedNotSaved: switched for this
+	// session but the save failed (UI: "Couldn't remember this choice"). Increment 11 adds the re-scan. Main thread only.
+	install::AppsDeviceSetting::SetResult setAppsDevice(install::Device dev, std::string* reason = nullptr) {
+		return appsDevice_.set(dev, reason);
+	}
+	install::AppsDeviceSetting& appsDeviceSetting() { return appsDevice_; }
 	void quit() { quitRequested = true; }
 	// A dialog opened while the LoadingScreen is on top (App's HOME menu) must never capture `AppEntry` pointers or
 	// references: the catalog may be replaced underneath it, and the handover to Home waits for the dialog.
@@ -145,6 +162,7 @@ private:
 	void comingSoon(const char* what);
 
 	Catalog catalog_;
+	install::AppsDeviceSetting appsDevice_;
 	net::Worker worker_{net::defaultTransportFactory()};
 	// Declared after the worker: its jobs only hold shared state, but it is destroyed (textures freed) first anyway.
 	std::unique_ptr<IconCache> icons_;

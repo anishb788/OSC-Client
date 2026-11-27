@@ -79,6 +79,8 @@ void DevOptions::parseFile(const std::string& text, DevOptions& o) {
 		else if (key == "nettest") o.nettest = val;
 		else if (key == "nettestbg") o.nettestBg = val;
 		else if (key == "nettestquit") o.nettestQuit = truthy(val);
+		else if (key == "appsdevice") o.appsDevice = val;
+		else if (key == "appsdeviceswap") o.appsDeviceSwap = truthy(val);
 	}
 }
 
@@ -104,6 +106,8 @@ DevOptions DevOptions::load(const std::string& dataDir) {
 	if (const char* v = std::getenv("OPENSHOP_NETTEST"); v && *v) o.nettest = v;
 	if (const char* v = std::getenv("OPENSHOP_NETTESTBG"); v && *v) o.nettestBg = v;
 	if (const char* v = std::getenv("OPENSHOP_NETTESTQUIT"); v && *v) o.nettestQuit = truthy(v);
+	if (const char* v = std::getenv("OPENSHOP_APPS_DEVICE"); v && *v) o.appsDevice = trim(v);
+	if (const char* v = std::getenv("OPENSHOP_APPS_DEVICE_SWAP"); v && *v) o.appsDeviceSwap = truthy(v);
 	return o;
 }
 
@@ -118,6 +122,7 @@ std::string DevOptions::describe() const {
 	       (iconBase.empty() ? std::string() : " icons=" + iconBase) +
 	       (autoRefreshMs < 0 ? std::string() : " autorefresh=" + std::to_string(autoRefreshMs)) +
 	       (heapProbe ? std::string(" heapprobe=1") : std::string()) + (stackProbe ? std::string(" stackprobe=1") : std::string()) +
+	       (appsDevice.empty() ? std::string() : " appsdevice=" + appsDevice) + (appsDeviceSwap ? std::string(" appsdeviceswap=1") : std::string()) +
 	       (nettest.empty() && nettestBg.empty() ? std::string() : " nettest=" + nettest + " nettestbg=" + nettestBg + " nettestquit=" + (nettestQuit ? "1" : "0"));
 }
 
@@ -140,6 +145,8 @@ std::string DevOptions::active() const {
 	if (perf) add("perf=1");
 	if (heapProbe) add("heapprobe=1");
 	if (stackProbe) add("stackprobe=1");
+	if (!appsDevice.empty()) add("appsdevice=" + appsDevice);
+	if (appsDeviceSwap) add("appsdeviceswap=1");
 	if (!nettest.empty() || !nettestBg.empty() || nettestQuit) add("nettest=" + nettest + " nettestbg=" + nettestBg);
 	return out;
 }

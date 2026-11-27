@@ -27,12 +27,14 @@
 #     --perf                                      log draw / present / frame times and the texture count every 120 frames
 #     --heapprobe                                 dev-only, once at startup: allocate 1 MB blocks until failure (cap 80 MB), log the MEM1/MEM2 split, the gap between them and sbrk before/peak/after, then free them. Not together with --stackprobe (then neither runs)
 #     --stackprobe                                dev-only, once at startup: run a 64 KB-stack thread, log the stack bounds (assumed on Wii), the stack high-water and what SDL_SetThreadPriority does. One probe per launch
+#     --appsdevice sd|usb                         force the "Show apps on" device for this session if it is mounted (never saved; falls back like a saved choice)
+#     --appsdeviceswap                            switch to the other device once after the first scan (does nothing until M3 Increment 11)
 #     --nettest <script>                          dev-only network self-test: GET URLs through the worker and log the results
 #     --nettestbg <url>                           ... plus a Background download alongside (shorthand for bg:<url> first)
 #     --nettestquit                               quit by itself when the script ends (a bg job still running tests stop())
 #                                                 Script syntax: src/net/NetSelfTest.h. The UI is untouched. Off by default.
 #   On Wii they are written to <app dir>/devstart as key=value lines (env vars don't reach
-#   Dolphin); on PC they are exported as OPENSHOP_START / _MOCK / _OFFLINE / _REFRESH / _FAIL / _TOPBAR / _MOCKDELAY / _RATELIMIT / _CACHETTL / _API / _ICONS / _AUTOREFRESH / _PERF / _HEAPPROBE / _STACKPROBE / _NETTEST / _NETTESTBG / _NETTESTQUIT.
+#   Dolphin); on PC they are exported as OPENSHOP_START / _MOCK / _OFFLINE / _REFRESH / _FAIL / _TOPBAR / _MOCKDELAY / _RATELIMIT / _CACHETTL / _API / _ICONS / _AUTOREFRESH / _PERF / _HEAPPROBE / _STACKPROBE / _NETTEST / _NETTESTBG / _NETTESTQUIT / _APPS_DEVICE / _APPS_DEVICE_SWAP.
 #   Dolphin's virtual SD card is synced with ./sdcard (put bgm.mp3 in sdcard/apps/OpenShop/).
 #   ./sdcard is a symlink to .dolphin/sdcard; .dolphin/ is the only repo dir Dolphin may write to.
 #   ./dev package             clean release build (never DEBUGTOOLS) into dist/OpenShop.zip for the Homebrew Channel (SD:/apps/OpenShop)
@@ -236,6 +238,8 @@ devstart_text() {
 	[[ -n "$OPT_NETTEST" ]] && echo "nettest=$OPT_NETTEST"
 	[[ -n "$OPT_NETTESTBG" ]] && echo "nettestbg=$OPT_NETTESTBG"
 	(( OPT_NETTESTQUIT )) && echo "nettestquit=1"
+	[[ -n "$OPT_APPSDEVICE" ]] && echo "appsdevice=$OPT_APPSDEVICE"
+	(( OPT_APPSDEVICESWAP )) && echo "appsdeviceswap=1"
 	return 0
 }
 
@@ -302,7 +306,8 @@ launch_pc() {
 	OPENSHOP_DATA="$APP_DIR" OPENSHOP_START="$START_SCREEN" OPENSHOP_MOCK="$OPT_MOCK" \
 		OPENSHOP_OFFLINE="$OPT_OFFLINE" OPENSHOP_REFRESH="$OPT_REFRESH" OPENSHOP_FAIL="$OPT_FAIL" OPENSHOP_TOPBAR="$OPT_TOPBAR" \
 		OPENSHOP_MOCKDELAY="$OPT_MOCKDELAY" OPENSHOP_RATELIMIT="$OPT_RATELIMIT" OPENSHOP_CACHETTL="$OPT_CACHETTL" OPENSHOP_API="$OPT_API" OPENSHOP_ICONS="$OPT_ICONS" OPENSHOP_AUTOREFRESH="$OPT_AUTOREFRESH" OPENSHOP_PERF="$OPT_PERF" OPENSHOP_HEAPPROBE="$OPT_HEAPPROBE" OPENSHOP_STACKPROBE="$OPT_STACKPROBE" \
-		OPENSHOP_NETTEST="$OPT_NETTEST" OPENSHOP_NETTESTBG="$OPT_NETTESTBG" OPENSHOP_NETTESTQUIT="$OPT_NETTESTQUIT" ./build-pc/openshop &
+		OPENSHOP_NETTEST="$OPT_NETTEST" OPENSHOP_NETTESTBG="$OPT_NETTESTBG" OPENSHOP_NETTESTQUIT="$OPT_NETTESTQUIT" \
+		OPENSHOP_APPS_DEVICE="$OPT_APPSDEVICE" OPENSHOP_APPS_DEVICE_SWAP="$OPT_APPSDEVICESWAP" ./build-pc/openshop &
 	echo $! > build-pc/.pid
 }
 
@@ -371,7 +376,7 @@ headers() {
 usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; }
 
 cmd="${1:-}"; shift || true
-START_SCREEN=""; OPT_MOCK=0; OPT_OFFLINE=0; OPT_REFRESH=0; OPT_FAIL=""; OPT_TOPBAR=""; OPT_MOCKDELAY=""; OPT_RATELIMIT=""; OPT_CACHETTL=""; OPT_API=""; OPT_ICONS=""; OPT_AUTOREFRESH=""; OPT_PERF=0; OPT_HEAPPROBE=0; OPT_STACKPROBE=0; OPT_NETTEST=""; OPT_NETTESTBG=""; OPT_NETTESTQUIT=0
+START_SCREEN=""; OPT_MOCK=0; OPT_OFFLINE=0; OPT_REFRESH=0; OPT_FAIL=""; OPT_TOPBAR=""; OPT_MOCKDELAY=""; OPT_RATELIMIT=""; OPT_CACHETTL=""; OPT_API=""; OPT_ICONS=""; OPT_AUTOREFRESH=""; OPT_PERF=0; OPT_HEAPPROBE=0; OPT_STACKPROBE=0; OPT_NETTEST=""; OPT_NETTESTBG=""; OPT_NETTESTQUIT=0; OPT_APPSDEVICE=""; OPT_APPSDEVICESWAP=0
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 		--screen)
@@ -388,6 +393,13 @@ while [[ $# -gt 0 ]]; do
 		--heapprobe)  OPT_HEAPPROBE=1; shift ;;
 		--stackprobe) OPT_STACKPROBE=1; shift ;;
 		--nettestquit) OPT_NETTESTQUIT=1; shift ;;
+		--appsdeviceswap) OPT_APPSDEVICESWAP=1; shift ;;
+		--appsdevice)
+			case "${2:-}" in sd|usb) OPT_APPSDEVICE="$2"; shift 2 ;; *) err "--appsdevice: needs sd or usb"; exit 1 ;; esac ;;
+		--appsdevice=*)
+			OPT_APPSDEVICE="${1#--appsdevice=}"
+			[[ "$OPT_APPSDEVICE" == sd || "$OPT_APPSDEVICE" == usb ]] || { err "--appsdevice: needs sd or usb"; exit 1; }
+			shift ;;
 		--nettest|--nettestbg)
 			[[ -n "${2:-}" && "${2:0:2}" != -- ]] || { err "$1: needs a value"; exit 1; }
 			[[ "$2" != *[[:space:]]* ]] || { err "$1: no spaces (separate script items with commas)"; exit 1; }

@@ -5,11 +5,11 @@
 //
 // Sources, highest priority first:
 //   1. Environment (PC build, set by `./dev`): OPENSHOP_START, OPENSHOP_MOCK, OPENSHOP_OFFLINE,
-//      OPENSHOP_REFRESH, OPENSHOP_FAIL, OPENSHOP_TOPBAR, OPENSHOP_MOCKDELAY, OPENSHOP_RATELIMIT, OPENSHOP_CACHETTL, OPENSHOP_API, OPENSHOP_ICONS, OPENSHOP_AUTOREFRESH, OPENSHOP_PERF, OPENSHOP_HEAPPROBE, OPENSHOP_STACKPROBE, OPENSHOP_NETTEST, OPENSHOP_NETTESTBG, OPENSHOP_NETTESTQUIT. An empty variable is ignored. On/off flags
+//      OPENSHOP_REFRESH, OPENSHOP_FAIL, OPENSHOP_TOPBAR, OPENSHOP_MOCKDELAY, OPENSHOP_RATELIMIT, OPENSHOP_CACHETTL, OPENSHOP_API, OPENSHOP_ICONS, OPENSHOP_AUTOREFRESH, OPENSHOP_PERF, OPENSHOP_HEAPPROBE, OPENSHOP_STACKPROBE, OPENSHOP_NETTEST, OPENSHOP_NETTESTBG, OPENSHOP_NETTESTQUIT, OPENSHOP_APPS_DEVICE, OPENSHOP_APPS_DEVICE_SWAP. An empty variable is ignored. On/off flags
 //      (mock, offline, refresh) are on unless the value is "0", "false", "no" or "off"; fail, topbar, mockdelay
 //      and ratelimit take the values described next to their fields.
 //   2. <dataDir>/devstart (Wii, written by `./dev`; env vars don't reach Dolphin): one key=value
-//      per line with keys screen, mock, offline, refresh, fail, topbar, mockdelay, ratelimit, cachettl, api, icons, autorefresh, perf, heapprobe, stackprobe, nettest, nettestbg, nettestquit. A line without '=' is a bare screen name
+//      per line with keys screen, mock, offline, refresh, fail, topbar, mockdelay, ratelimit, cachettl, api, icons, autorefresh, perf, heapprobe, stackprobe, nettest, nettestbg, nettestquit, appsdevice, appsdeviceswap. A line without '=' is a bare screen name
 //      (the old one-line format).
 struct DevOptions {
 	std::string screen; // "" = normal start
@@ -70,6 +70,13 @@ struct DevOptions {
 	std::string nettest;
 	std::string nettestBg;
 	bool nettestQuit = false;
+
+	// appsdevice=sd|usb: forces the "Show apps on" device for this session if it is mounted; never saved. Stored as typed
+	// (trimmed, case kept); App (install::parseDeviceId, case-insensitive) rejects anything but sd / usb with a log line. Empty = off.
+	std::string appsDevice;
+	// appsdeviceswap=1: once the first scan is done (Increment 11), switch to the other device once, to test switching
+	// before M4's Settings row exists. Parsed now; does nothing until Increment 11 (App logs that it was requested).
+	bool appsDeviceSwap = false;
 
 	static DevOptions load(const std::string& dataDir);
 	// Parses the devstart file text into `o`. Exposed separately so it can be tested without files.

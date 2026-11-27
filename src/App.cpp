@@ -57,6 +57,29 @@ bool App::init(int argc, char** argv) {
 	LOG("OpenShop %s, User-Agent: %s", OPENSHOP_VERSION, userAgent());
 	LOG("libzip %s", zip_libzip_version()); // proves the archive library is linked (M3 installs use it)
 	LOG("Dev options: %s", opts.describe().c_str());
+	{
+		install::AppsDeviceSetting::Mounts m;
+		for (const auto& r : platform::storageRoots()) {
+			if (r.id == install::deviceId(install::Device::Sd)) { m.sd = r.mounted; m.sdRoot = r.root; }
+			else if (r.id == install::deviceId(install::Device::Usb)) { m.usb = r.mounted; m.usbRoot = r.root; }
+		}
+		std::optional<install::Device> ov;
+		if (!opts.appsDevice.empty()) {
+			ov = install::parseDeviceId(opts.appsDevice);
+			if (!ov) LOG("Apps device: dev option appsdevice=%s is not sd or usb, ignored", opts.appsDevice.c_str());
+		}
+		appsDevice_.setBusy([] {
+			static bool logged = false;
+			if (!logged) {
+				logged = true;
+				LOG("busy guard: no job system yet (Increment 7 plugs in Jobs::busy())");
+			}
+			return false;
+		});
+		appsDevice_.init(platform::dataDir() + "/appsdevice.ini", m, ov);
+		if (opts.appsDeviceSwap)
+			LOG("Apps device: appsdeviceswap=1 requested; it acts after the first scan (Increment 11), so nothing happens yet");
+	}
 	switch (opts.probeChoice()) { // one probe per launch
 		case DevOptions::ProbeChoice::Heap: platform::heapProbe(); break;
 		case DevOptions::ProbeChoice::Stack: platform::stackProbe(); break;

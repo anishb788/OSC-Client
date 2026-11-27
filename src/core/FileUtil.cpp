@@ -110,7 +110,9 @@ bool writeFileAtomic(const std::string& path, const std::string& data, const Fil
 ReadStatus readFileCapped(const std::string& path, std::string& out, size_t maxBytes) {
 	out.clear();
 	std::FILE* f = std::fopen(path.c_str(), "rb");
-	if (!f) return ReadStatus::Missing;
+	// Only a clean "not there" is Missing: callers delete or skip on it. Any other failure (EIO, EACCES, a card that went away)
+	// is an I/O error, never a reason to assume the file is absent.
+	if (!f) return errno == ENOENT || errno == ENOTDIR ? ReadStatus::Missing : ReadStatus::IoError;
 	ReadStatus rs = ReadStatus::IoError;
 	if (std::fseek(f, 0, SEEK_END) == 0) {
 		long size = std::ftell(f);
@@ -128,6 +130,14 @@ ReadStatus readFileCapped(const std::string& path, std::string& out, size_t maxB
 	std::fclose(f);
 	if (rs != ReadStatus::Ok) out.clear();
 	return rs;
+}
+
+Presence presenceOf(const std::string& path, const FileOps& ops, FileStat* out) {
+	FileStat st;
+	const int rc = (ops.stat ? ops.stat : &realStat)(path.c_str(), &st);
+	if (out) *out = rc == 0 ? st : FileStat{};
+	if (rc != 0) return Presence::Error;
+	return st.exists ? Presence::Present : Presence::Absent;
 }
 
 bool makeDirs(const std::string& dir, const FileOps& ops) {

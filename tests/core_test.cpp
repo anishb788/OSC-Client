@@ -301,6 +301,21 @@ static void testProbeExclusive() {
 	CHECK(parse("stackprobe=1\n").probeChoice() == PC::Stack);
 	CHECK(parse("heapprobe=1\nstackprobe=1\n").probeChoice() == PC::Conflict);
 	CHECK(parse("heapprobe=1\nstackprobe=0\n").probeChoice() == PC::Heap);
+	// the commit probe (M3 Increment 6): exclusive with the other two, keys and environment, sizes
+	CHECK(parse("commitprobe=cap\n").probeChoice() == PC::Commit && parse("commitprobe=flush\n").commitProbe == "flush");
+	CHECK(parse("commitprobe=cap\nheapprobe=1\n").probeChoice() == PC::Conflict);
+	CHECK(parse("commitprobe=cap\nstackprobe=1\n").probeChoice() == PC::Conflict);
+	CHECK(parse("commitprobe=cap\nheapprobe=0\n").probeChoice() == PC::Commit);
+	DevOptions o = parse("commitprobe=cap\ncommitprobe_files=19000\ncommitprobe_stack=32\n");
+	CHECK(o.commitProbeFiles == 19000 && o.commitProbeStackKb == 32);
+	CHECK(o.active() == "commitprobe=cap commitprobe_files=19000 commitprobe_stack=32");
+	CHECK(parse("").commitProbe.empty() && parse("").commitProbeFiles < 0 && parse("").commitProbeStackKb < 0);
+	CHECK(parse("").active().find("commitprobe") == std::string::npos && parse("").describe().find("commitprobe") == std::string::npos);
+	setenv("OPENSHOP_COMMITPROBE", "flush", 1);
+	setenv("OPENSHOP_COMMITPROBE_FILES", "123", 1);
+	o = DevOptions::load("/nonexistent-openshop-dir");
+	CHECK(o.commitProbe == "flush" && o.commitProbeFiles == 123 && o.probeChoice() == PC::Commit);
+	for (const char* n : {"OPENSHOP_COMMITPROBE", "OPENSHOP_COMMITPROBE_FILES", "OPENSHOP_COMMITPROBE_STACK"}) unsetenv(n);
 }
 
 static void testRootOf() {

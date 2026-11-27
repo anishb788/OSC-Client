@@ -5,17 +5,17 @@
 //
 // TWO PHASES
 //   Start  (written before extraction): jobId, kind, slug, device, stagingDir. Recovery then always knows which staging to clean.
-//   Commit (written and fsynced before the first rename, then rewritten only now and then): the ordered ops plus `step`.
+//   Commit (written and fsynced ONCE, before the first rename): the ordered ops plus `step` (always -1, see below).
 //
-// STEP IS A LOWER BOUND (not "exactly the last completed op"). `step` = "at least ops[0..step] are done" (-1: none known).
-// Rewriting the journal is O(ops) and fsynced, so Commit does NOT rewrite it after every op: it rewrites it after a dir-level
-// op (isDirLevelOp: renameDir, parkDir, writeManifest) and after every kJournalFlushEvery ops otherwise (journalFlushDue). A
-// cut can therefore leave up to kJournalFlushEvery-1 ops done beyond `step`, plus the op that was running. Consequences, which
-// Commit and recovery (Increment 6) must honour:
+// STEP IS INFORMATIONAL. Rewriting the journal is O(ops) and fsynced, so Commit writes the commit phase ONCE, before the first
+// rename (step = -1), and never again (user decision 2026-11-27, review M4: a periodic rewrite only added fsyncs and a window in
+// which the journal itself could be cut). `step` is therefore always -1 on disk; the field stays in the format ("at least
+// ops[0..step] are done") for a later writer, and nothing may rely on it. Consequences, which Commit and recovery (Increment 6)
+// honour:
 //   - EVERY op is idempotent: repeating one that is already done (or half done) must be harmless;
-//   - recovery never trusts `step` to decide what happened: from ops[step+1] on it PROBES the real file system (does `path`
-//     exist, does `other` exist, is `other` a half-copied tmp) for each op and does or skips what is left; ops up to `step`
-//     are skipped without a look. Rolling back walks the same ops in reverse, probing the same way.
+//   - recovery never trusts `step`: it PROBES the real file system (does `path` exist, does `other` exist, is `other` a
+//     half-copied tmp) for each op, from the first op on, and does or skips what is left. Rolling back walks the same ops in
+//     reverse, probing the same way. A probe that cannot tell (a failing stat) is a failure of that op, never "absent".
 //
 // SIZE: kMaxJournalOps ops and kMaxJournalBytes bytes. A job whose plan would not fit (journalSaveProblem is not empty) is
 // refused at planning time, before the first rename. parkFile and restoreFile may carry a whole subfolder as ONE plain rename
@@ -25,7 +25,7 @@
 // ON DISK
 //   { "formatVersion": 1, "phase": "start"|"commit", "jobId": 7, "kind": "install"|"update", "slug": "...", "device": "sd"|"usb",
 //     "stagingDir": "apps/OpenShop/staging/7",
-//     "ops": [ { "op": "renameDir", "path": "apps/foo", "other": "apps/OpenShop/staging/7/root/apps/foo" }, ... ], "step": 0 }
+//     "ops": [ { "op": "renameDir", "path": "apps/foo", "other": "apps/OpenShop/staging/7/root/apps/foo" }, ... ], "step": -1 }
 // ("ops" and "step" only in the commit phase.) All paths are relative to the device root. The staging dir of job N is laid
 // out like the device (the root/ tree is ZipExtract's output):
 //   <staging>/root/<path>      what was extracted for <path>
@@ -39,7 +39,10 @@
 //   parkFile      path -> other        other = <staging>/old/<path>. An existing file (or folder) is moved aside before it is
 //                                      overwritten
 //   restoreFile   other -> path        other = <staging>/old/<path>. Carry-over of a parked file or whole subfolder back into a
-//                                      new app dir. Update only; path lies below an app dir that was parked and renamed earlier
+//                                      new app dir. Update only; path lies below an app dir that was parked and renamed earlier.
+//                                      Exception (user decision 2026-11-27): an old FOLDER that the new archive replaces by a FILE
+//                                      of the same name (or an old file by a new folder) is kept under a new name: path = X.old
+//                                      (X.old2, X.old3, ...) and other = <staging>/old/<X>. Nothing else may differ.
 //   writeFile     other -> path        other = <staging>/root/<path>. A staged file outside apps/<dir> goes in; `preexisting`
 //                                      says something was there, and then a parkFile of the same path comes earlier
 //   mkdir         path                 a directory is created; `created` says it did not exist
@@ -78,8 +81,6 @@ constexpr size_t kMaxJournalBytes = 4u * 1024 * 1024;
 constexpr size_t kMaxJournalOps = 20000;
 // Values in the text: an op costs up to 6 ('{', four inner ',', the separating ','), plus slack.
 constexpr size_t kMaxJournalValues = 6 * kMaxJournalOps + 1024;
-// Commit rewrites the journal after a dir-level op and after this many ops since the last rewrite (see "STEP" above).
-constexpr int kJournalFlushEvery = 32;
 
 enum class JournalPhase { Start, Commit };
 enum class JournalKind { Install, Update };
@@ -102,7 +103,7 @@ struct Journal {
 	std::string device; // "sd" | "usb"
 	std::string stagingDir; // stagingRelPath(jobId)
 	std::vector<JournalOp> ops; // Commit only
-	int step = -1;              // Commit only: at least ops[0..step] are done (a lower bound; see "STEP IS A LOWER BOUND")
+	int step = -1;              // Commit only: informational, always -1 on disk (see "STEP IS INFORMATIONAL")
 };
 
 const char* opName(OpType t);
@@ -113,11 +114,6 @@ std::string stagedRootPath(const std::string& stagingDir, const std::string& pat
 std::string stagedOldPath(const std::string& stagingDir, const std::string& path);  // <staging>/old/<path>
 std::string stagedManifestPath(const std::string& stagingDir);                      // <staging>/manifest.json
 
-// Dir-level ops (a rename that moves a whole app dir, or the manifest): the journal is rewritten right after them.
-bool isDirLevelOp(OpType t);
-// True when the journal should be rewritten after an op of type `t` completed, `opsSinceFlush` ops after the last rewrite
-// (counting this one): a dir-level op, or kJournalFlushEvery ops. Commit also rewrites after its last op.
-bool journalFlushDue(OpType t, int opsSinceFlush);
 std::string journalPath(const std::string& root);
 
 // "" when the journal would be accepted by parseJournal, else the first problem (fields, op shapes, consistency).

@@ -13,8 +13,12 @@
 #include "core/Log.h"
 #include "core/Version.h"
 #include "gfx/Theme.h"
+#include "install/Recovery.h"
 #include "net/HttpWii.h"
 #include "platform/Platform.h"
+#ifdef OPENSHOP_DEBUGTOOLS
+#include "platform/CommitProbe.h"
+#endif
 #include "ui/Widgets.h"
 
 #include <zip.h>
@@ -80,11 +84,32 @@ bool App::init(int argc, char** argv) {
 		if (opts.appsDeviceSwap)
 			LOG("Apps device: appsdeviceswap=1 requested; it acts after the first scan (Increment 11), so nothing happens yet");
 	}
+	{
+		// Journal-driven recovery (M3 Increment 6): finish or undo an install that was interrupted by a power cut or a crash, on
+		// EVERY mounted device (not only the one "Show apps on" picks). Renames and probes only (no bulk deletion: leftover
+		// staging folders wait for Increment 7's Cleanup job), so it runs here, before any screen. A device that is not mounted
+		// is skipped silently: its journal waits for a start where it is present. Nothing is logged for a device with nothing
+		// to recover.
+		std::vector<install::RecoveryRoot> mounted;
+		for (const auto& r : platform::storageRoots())
+			if (r.mounted) mounted.push_back({r.id, r.root});
+		for (const install::RootRecovery& rr : install::recover(mounted))
+			if (rr.outcome != install::RecoveryOutcome::Nothing)
+				LOG("Recovery on %s: %s%s", rr.id.c_str(), install::describe(rr.outcome), rr.detail.empty() ? "" : (" (" + rr.detail + ")").c_str());
+	}
 	switch (opts.probeChoice()) { // one probe per launch
 		case DevOptions::ProbeChoice::Heap: platform::heapProbe(); break;
 		case DevOptions::ProbeChoice::Stack: platform::stackProbe(); break;
+		case DevOptions::ProbeChoice::Commit:
+#ifdef OPENSHOP_DEBUGTOOLS
+			platform::commitProbe(opts.commitProbe, opts.commitProbeFiles, opts.commitProbeStackKb);
+#else
+			LOG("probe: commitprobe=%s was requested, but the commit probe only exists in DEBUGTOOLS builds (./dev run --commitprobe builds one)",
+			    opts.commitProbe.c_str());
+#endif
+			break;
 		case DevOptions::ProbeChoice::Conflict:
-			LOG("probe: heapprobe and stackprobe were both requested; they disturb each other, so NEITHER runs. Ask for one.");
+			LOG("probe: more than one of heapprobe, stackprobe and commitprobe was requested; they disturb each other, so NONE runs. Ask for one.");
 			break;
 		case DevOptions::ProbeChoice::None: break;
 	}

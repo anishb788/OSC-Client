@@ -1663,6 +1663,22 @@ static void testJournalBindings() {
 		j.ops.insert(j.ops.begin() + 4, {OpType::Mkdir, "apps/WiiMC/skins", "", false, true});
 		CHECK(validateJournal(j).empty() && parseJournal(journalToJson(j)).ok);
 	}
+	// A restoreFile may keep an old entry under "<name>.old" / ".old<N>" (user decision 2026-11-27), and nothing else.
+	{
+		auto kept = [&](const std::string& path, const std::string& other) {
+			Journal j = good;
+			j.ops.insert(j.ops.begin() + 3, {OpType::RestoreFile, path, S + "/old/" + other, false, false});
+			return validateJournal(j);
+		};
+		CHECK(kept("apps/WiiMC/data.old", "apps/WiiMC/data").empty());
+		CHECK(kept("apps/WiiMC/data.old2", "apps/WiiMC/data").empty() && kept("apps/WiiMC/s/d.old17", "apps/WiiMC/s/d").empty());
+		CHECK(!kept("apps/WiiMC/data.old1", "apps/WiiMC/data").empty() && !kept("apps/WiiMC/data.old02", "apps/WiiMC/data").empty());
+		CHECK(!kept("apps/WiiMC/data.old2x", "apps/WiiMC/data").empty() && !kept("apps/WiiMC/data.bak", "apps/WiiMC/data").empty());
+		CHECK(!kept("apps/WiiMC/data.old", "apps/WiiMC/other").empty());                    // another entry
+		CHECK(!kept("apps/WiiMC/s/data.old", "apps/WiiMC/data").empty());                   // another folder
+		CHECK(!kept("apps/WiiMC/data.old", "apps/Other/data").empty());                     // another app dir
+		CHECK(!kept("apps/WiiMC/data.old", "../x").empty());
+	}
 	// M4: writeFile needs the preexisting key; JournalOp defaults to the safe value.
 	CHECK(JournalOp{}.preexisting && !JournalOp{}.created);
 	std::string text = journalToJson(good);
@@ -1743,12 +1759,7 @@ static void testJournalConsistency() {
 }
 
 static void testJournalSizeAndFlush() {
-	// Flush policy (H2): dir-level ops always, others every kJournalFlushEvery.
-	CHECK(isDirLevelOp(OpType::RenameDir) && isDirLevelOp(OpType::ParkDir) && isDirLevelOp(OpType::WriteManifest));
-	CHECK(!isDirLevelOp(OpType::WriteFile) && !isDirLevelOp(OpType::Mkdir) && !isDirLevelOp(OpType::ParkFile) && !isDirLevelOp(OpType::RestoreFile));
-	CHECK(journalFlushDue(OpType::RenameDir, 1) && journalFlushDue(OpType::ParkDir, 1));
-	CHECK(!journalFlushDue(OpType::WriteFile, 1) && !journalFlushDue(OpType::WriteFile, kJournalFlushEvery - 1));
-	CHECK(journalFlushDue(OpType::WriteFile, kJournalFlushEvery) && kJournalFlushEvery == 32);
+	// The periodic flush is gone (review M4): the commit phase is written once, so there is no flush policy to test.
 	// Plan-time fit: ops over the cap, and bytes over the cap.
 	auto manyOps = [](size_t n, size_t pad) {
 		Journal j = sampleInstallJournal();

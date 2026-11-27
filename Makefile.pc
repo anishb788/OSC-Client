@@ -99,7 +99,7 @@ $(BUILD)/tobj/%.o: %.c $(STAMP)
 
 # name -> sources (tests/<name>.cpp is added automatically) and extra link libraries.
 TESTS := catalog_test core_test topbar_test layout_test http_parse_test http_transfer_test http_posix_test worker_test \
-         nettest_script_test oscapi_test netloader_test cache_test wrap_test httpget gfx_test icon_test install_test fileutil_test zip_test
+         nettest_script_test oscapi_test netloader_test cache_test wrap_test httpget gfx_test icon_test install_test fileutil_test zip_test commit_test
 SRCS_catalog_test        := src/catalog/Catalog.cpp src/core/NameRules.cpp src/install/Rules.cpp src/catalog/ArchiveUrl.cpp src/catalog/MockCatalog.cpp
 SRCS_core_test           := src/core/DevOptions.cpp
 SRCS_topbar_test         :=
@@ -137,6 +137,9 @@ SRCS_fileutil_test       := src/core/FileUtil.cpp
 # M3 Increment 4: ZipExtract against libzip (fixtures are built at run time with libzip's writer).
 SRCS_zip_test            := src/install/ZipExtract.cpp src/install/Rules.cpp src/core/NameRules.cpp src/core/FileUtil.cpp
 LIBS_zip_test            := $(shell pkg-config --libs libzip)
+# M3 Increment 6: the commit engine and recovery (temp device roots, fork()ed power cuts).
+SRCS_commit_test         := src/install/Commit.cpp src/install/Recovery.cpp src/install/ZipExtract.cpp src/install/Manifest.cpp src/install/Journal.cpp src/install/RecordIo.cpp src/install/Rules.cpp src/core/NameRules.cpp src/core/FileUtil.cpp
+LIBS_commit_test         := $(shell pkg-config --libs libzip) $(JANSSONLIBS)
 
 define TESTRULE
 $$(BUILD)/tests/$(1): $$(call tobj,tests/$(1).cpp $$(SRCS_$(1)))

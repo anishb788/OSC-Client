@@ -5,11 +5,11 @@
 //
 // Sources, highest priority first:
 //   1. Environment (PC build, set by `./dev`): OPENSHOP_START, OPENSHOP_MOCK, OPENSHOP_OFFLINE,
-//      OPENSHOP_REFRESH, OPENSHOP_FAIL, OPENSHOP_TOPBAR, OPENSHOP_MOCKDELAY, OPENSHOP_RATELIMIT, OPENSHOP_CACHETTL, OPENSHOP_API, OPENSHOP_ICONS, OPENSHOP_AUTOREFRESH, OPENSHOP_PERF, OPENSHOP_HEAPPROBE, OPENSHOP_STACKPROBE, OPENSHOP_NETTEST, OPENSHOP_NETTESTBG, OPENSHOP_NETTESTQUIT, OPENSHOP_APPS_DEVICE, OPENSHOP_APPS_DEVICE_SWAP. An empty variable is ignored. On/off flags
+//      OPENSHOP_REFRESH, OPENSHOP_FAIL, OPENSHOP_TOPBAR, OPENSHOP_MOCKDELAY, OPENSHOP_RATELIMIT, OPENSHOP_CACHETTL, OPENSHOP_API, OPENSHOP_ICONS, OPENSHOP_AUTOREFRESH, OPENSHOP_PERF, OPENSHOP_HEAPPROBE, OPENSHOP_STACKPROBE, OPENSHOP_COMMITPROBE, OPENSHOP_COMMITPROBE_FILES, OPENSHOP_COMMITPROBE_STACK, OPENSHOP_NETTEST, OPENSHOP_NETTESTBG, OPENSHOP_NETTESTQUIT, OPENSHOP_APPS_DEVICE, OPENSHOP_APPS_DEVICE_SWAP. An empty variable is ignored. On/off flags
 //      (mock, offline, refresh) are on unless the value is "0", "false", "no" or "off"; fail, topbar, mockdelay
 //      and ratelimit take the values described next to their fields.
 //   2. <dataDir>/devstart (Wii, written by `./dev`; env vars don't reach Dolphin): one key=value
-//      per line with keys screen, mock, offline, refresh, fail, topbar, mockdelay, ratelimit, cachettl, api, icons, autorefresh, perf, heapprobe, stackprobe, nettest, nettestbg, nettestquit, appsdevice, appsdeviceswap. A line without '=' is a bare screen name
+//      per line with keys screen, mock, offline, refresh, fail, topbar, mockdelay, ratelimit, cachettl, api, icons, autorefresh, perf, heapprobe, stackprobe, commitprobe, commitprobe_files, commitprobe_stack, nettest, nettestbg, nettestquit, appsdevice, appsdeviceswap. A line without '=' is a bare screen name
 //      (the old one-line format).
 struct DevOptions {
 	std::string screen; // "" = normal start
@@ -58,11 +58,27 @@ struct DevOptions {
 	// painted-stack high-water and what SDL_SetThreadPriority does (platform::stackProbe). Does nothing unless set.
 	bool stackProbe = false;
 
-	// One probe per launch: the two disturb each other's numbers (and the heap probe fills the whole heap), so asking for
-	// both runs NEITHER and App logs why.
-	enum class ProbeChoice { None, Heap, Stack, Conflict };
+	// commitprobe=cap|flush (DEBUGTOOLS builds only, platform::commitProbe; a release logs that it is not built in): once at
+	// startup, measure the commit engine on the device on a worker thread with the install worker's stack size.
+	//   cap    builds a synthetic old install and a staged update near the plan caps under apps/osprobe, runs a full update commit
+	//          and logs heap in use / elapsed ms per phase / stack high-water; everything is removed again.
+	//   flush  writes three files (journal-style fsynced, plain fwrite+fclose, fsynced rename) and sleeps 90 s so the host can
+	//          snapshot the emulated SD card; then removes them.
+	// Stored as typed (trimmed); App rejects any other value with a log line. Empty = off.
+	std::string commitProbe;
+	// commitprobe_files=<n>: size of the cap probe (see src/platform/CommitProbe.h): n restore ops, ~2n manifest paths. Default 5000;
+	// 19000 sits just under both caps (20000 ops, 40000 paths). -1 = default.
+	int commitProbeFiles = -1;
+	// commitprobe_stack=<KB>: the worker's stack size, default 64 (the plan's proposal for the install worker). -1 = default.
+	int commitProbeStackKb = -1;
+
+	// One probe per launch: they disturb each other's numbers (and the heap probe fills the whole heap), so asking for more
+	// than one runs NONE and App logs why.
+	enum class ProbeChoice { None, Heap, Stack, Commit, Conflict };
 	ProbeChoice probeChoice() const {
-		return heapProbe && stackProbe ? ProbeChoice::Conflict : heapProbe ? ProbeChoice::Heap : stackProbe ? ProbeChoice::Stack : ProbeChoice::None;
+		const int n = (heapProbe ? 1 : 0) + (stackProbe ? 1 : 0) + (commitProbe.empty() ? 0 : 1);
+		if (n > 1) return ProbeChoice::Conflict;
+		return heapProbe ? ProbeChoice::Heap : stackProbe ? ProbeChoice::Stack : !commitProbe.empty() ? ProbeChoice::Commit : ProbeChoice::None;
 	}
 
 	// nettest=<script>, nettestbg=<url>, nettestquit=1: the Increment 7 network self-test (net/NetSelfTest.h). Off (empty)

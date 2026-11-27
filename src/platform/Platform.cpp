@@ -398,6 +398,16 @@ std::string heapSummary() {
 	return buf;
 }
 
+size_t heapInUseBytes() {
+	const HeapNumbers h = heapNumbers();
+#ifdef __wii__
+	const size_t gap = memGap();
+	return h.used > gap ? h.used - gap : h.used;
+#else
+	return h.used;
+#endif
+}
+
 namespace {
 void logHeapState(const char* when) {
 	const HeapNumbers h = heapNumbers();

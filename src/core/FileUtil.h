@@ -63,7 +63,14 @@ bool writeFileAtomic(const std::string& path, const std::string& data, const Fil
 
 // Reads the whole file with one fread after fseek/ftell. A file larger than `maxBytes` is refused before anything is
 // allocated (the SD card is untrusted input). `out` is empty unless the result is Ok.
+// Missing is only ENOENT/ENOTDIR from fopen; any other open failure is IoError.
 ReadStatus readFileCapped(const std::string& path, std::string& out, size_t maxBytes);
+
+// Three-way answer for "is it there": a failing stat is an ERROR, never "absent". Everything that deletes, skips or decides on
+// absence (recovery, commit) must tell the two apart: reading a flaky card as "missing" would drop a journal or skip an undo.
+enum class Presence { Present, Absent, Error };
+// lstat semantics through `ops.stat` (or the real call). `out` (optional) gets the stat when the call answered.
+Presence presenceOf(const std::string& path, const FileOps& ops = {}, FileStat* out = nullptr);
 
 // Creates `dir` and every missing parent. True if it exists afterwards.
 bool makeDirs(const std::string& dir, const FileOps& ops = {});

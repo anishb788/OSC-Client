@@ -32,6 +32,9 @@ RemoveResult removeTree(const std::string& path, const std::string& mustBeUnder)
 // One line for the perf=1 log, every 120 frames: malloc arena, bytes in use and their high-water, and where the free
 // heap is (Wii: MEM1 and MEM2 arenas, with the MEM1->MEM2 address gap taken out; PC: the process RSS).
 std::string heapSummary();
+// Bytes of malloc'd heap in use now (mallinfo uordblks; on the Wii the MEM1->MEM2 address gap is taken out, as in
+// heapSummary). Cheap enough to sample at a few points of a job; the commit probe uses it.
+size_t heapInUseBytes();
 // Dev-only (heapprobe=1): grabs 1 MB blocks until malloc fails or 80 MB, logs the blocks per region (MEM1/MEM2: count,
 // lowest, highest), the MEM1->MEM2 gap, sbrk(0) before / at peak / after, and a RESULT line; then frees them again.
 void heapProbe();

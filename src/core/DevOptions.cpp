@@ -76,6 +76,9 @@ void DevOptions::parseFile(const std::string& text, DevOptions& o) {
 		else if (key == "perf") o.perf = truthy(val);
 		else if (key == "heapprobe") o.heapProbe = truthy(val);
 		else if (key == "stackprobe") o.stackProbe = truthy(val);
+		else if (key == "commitprobe") o.commitProbe = val;
+		else if (key == "commitprobe_files") o.commitProbeFiles = parseNonNegative(val);
+		else if (key == "commitprobe_stack") o.commitProbeStackKb = parseNonNegative(val);
 		else if (key == "nettest") o.nettest = val;
 		else if (key == "nettestbg") o.nettestBg = val;
 		else if (key == "nettestquit") o.nettestQuit = truthy(val);
@@ -103,6 +106,9 @@ DevOptions DevOptions::load(const std::string& dataDir) {
 	if (const char* v = std::getenv("OPENSHOP_PERF"); v && *v) o.perf = truthy(v);
 	if (const char* v = std::getenv("OPENSHOP_HEAPPROBE"); v && *v) o.heapProbe = truthy(v);
 	if (const char* v = std::getenv("OPENSHOP_STACKPROBE"); v && *v) o.stackProbe = truthy(v);
+	if (const char* v = std::getenv("OPENSHOP_COMMITPROBE"); v && *v) o.commitProbe = trim(v);
+	if (const char* v = std::getenv("OPENSHOP_COMMITPROBE_FILES"); v && *v) o.commitProbeFiles = parseNonNegative(v);
+	if (const char* v = std::getenv("OPENSHOP_COMMITPROBE_STACK"); v && *v) o.commitProbeStackKb = parseNonNegative(v);
 	if (const char* v = std::getenv("OPENSHOP_NETTEST"); v && *v) o.nettest = v;
 	if (const char* v = std::getenv("OPENSHOP_NETTESTBG"); v && *v) o.nettestBg = v;
 	if (const char* v = std::getenv("OPENSHOP_NETTESTQUIT"); v && *v) o.nettestQuit = truthy(v);
@@ -122,6 +128,9 @@ std::string DevOptions::describe() const {
 	       (iconBase.empty() ? std::string() : " icons=" + iconBase) +
 	       (autoRefreshMs < 0 ? std::string() : " autorefresh=" + std::to_string(autoRefreshMs)) +
 	       (heapProbe ? std::string(" heapprobe=1") : std::string()) + (stackProbe ? std::string(" stackprobe=1") : std::string()) +
+	       (commitProbe.empty() ? std::string() : " commitprobe=" + commitProbe) +
+	       (commitProbeFiles < 0 ? std::string() : " commitprobe_files=" + std::to_string(commitProbeFiles)) +
+	       (commitProbeStackKb < 0 ? std::string() : " commitprobe_stack=" + std::to_string(commitProbeStackKb)) +
 	       (appsDevice.empty() ? std::string() : " appsdevice=" + appsDevice) + (appsDeviceSwap ? std::string(" appsdeviceswap=1") : std::string()) +
 	       (nettest.empty() && nettestBg.empty() ? std::string() : " nettest=" + nettest + " nettestbg=" + nettestBg + " nettestquit=" + (nettestQuit ? "1" : "0"));
 }
@@ -145,6 +154,9 @@ std::string DevOptions::active() const {
 	if (perf) add("perf=1");
 	if (heapProbe) add("heapprobe=1");
 	if (stackProbe) add("stackprobe=1");
+	if (!commitProbe.empty()) add("commitprobe=" + commitProbe);
+	if (commitProbeFiles >= 0) add("commitprobe_files=" + std::to_string(commitProbeFiles));
+	if (commitProbeStackKb >= 0) add("commitprobe_stack=" + std::to_string(commitProbeStackKb));
 	if (!appsDevice.empty()) add("appsdevice=" + appsDevice);
 	if (appsDeviceSwap) add("appsdeviceswap=1");
 	if (!nettest.empty() || !nettestBg.empty() || nettestQuit) add("nettest=" + nettest + " nettestbg=" + nettestBg);

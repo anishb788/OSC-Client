@@ -23,6 +23,23 @@ constexpr OpName kOps[] = {
 
 bool slugEq(std::string_view a, std::string_view b) { return foldKey(a) == foldKey(b); }
 
+// A restoreFile may bring an old entry back under another name (an old folder that the new archive replaces with a file of the
+// same name, or the reverse; user decision 2026-11-27): path = X + ".old" or X + ".old<N>" (N >= 2, no leading zero) and
+// other = <staging>/old/<X>. Anything else is not bound to its path.
+bool isKeptRename(const std::string& path, const std::string& other, const std::string& stagingDir) {
+	const std::string prefix = stagingDir + "/old/";
+	if (other.compare(0, prefix.size(), prefix) != 0) return false;
+	const std::string x = other.substr(prefix.size());
+	if (!isTargetFilePath(x) || path.size() <= x.size() || path.compare(0, x.size(), x) != 0) return false;
+	const std::string suf = path.substr(x.size());
+	if (suf == ".old") return true;
+	if (suf.compare(0, 4, ".old") != 0 || suf.size() > 4 + 6) return false;
+	const std::string n = suf.substr(4);
+	if (n.empty() || n == "1" || n[0] == '0') return false;
+	for (char c : n) if (c < '0' || c > '9') return false;
+	return true;
+}
+
 // The shape of one op alone. `other` must be exactly the generated string for this job and path.
 std::string checkOp(const JournalOp& op, const Journal& j) {
 	switch (op.type) {
@@ -35,9 +52,13 @@ std::string checkOp(const JournalOp& op, const Journal& j) {
 		if (op.other != stagedOldPath(j.stagingDir, op.path)) return "op 'other' is not <staging>/old/<path>";
 		break;
 	case OpType::ParkFile:
-	case OpType::RestoreFile:
 		if (!isTargetFilePath(op.path)) return "op path is not a valid file target";
 		if (op.other != stagedOldPath(j.stagingDir, op.path)) return "op 'other' is not <staging>/old/<path>";
+		break;
+	case OpType::RestoreFile:
+		if (!isTargetFilePath(op.path)) return "op path is not a valid file target";
+		if (op.other != stagedOldPath(j.stagingDir, op.path) && !isKeptRename(op.path, op.other, j.stagingDir))
+			return "op 'other' is not <staging>/old/<path> (or the entry it was kept from)";
 		break;
 	case OpType::WriteFile:
 		if (!isOutsideFilePath(op.path)) return "writeFile path is not a file outside apps/";
@@ -105,9 +126,6 @@ const char* opName(OpType t) {
 	for (const OpName& o : kOps) if (o.t == t) return o.n;
 	return "?";
 }
-
-bool isDirLevelOp(OpType t) { return t == OpType::RenameDir || t == OpType::ParkDir || t == OpType::WriteManifest; }
-bool journalFlushDue(OpType t, int opsSinceFlush) { return isDirLevelOp(t) || opsSinceFlush >= kJournalFlushEvery; }
 
 std::string stagedRootPath(const std::string& stagingDir, const std::string& path) { return stagingDir + "/root/" + path; }
 std::string stagedOldPath(const std::string& stagingDir, const std::string& path) { return stagingDir + "/old/" + path; }

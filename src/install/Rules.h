@@ -46,6 +46,12 @@ const char* describe(NameReject r);
 // ASCII case fold for FAT (case-insensitive) collision checks. Bytes above 127 are left alone.
 std::string foldKey(std::string_view path);
 
+// Like foldKey, plus simple (1:1) Unicode case folding of Latin-1 Supplement, Latin Extended-A/B, Greek and Cyrillic, so
+// "apps/x/\xc3\xa9" and "apps/x/\xc3\x89" (e-acute, E-acute) collide the way FAT's case-insensitive lookup treats them. The
+// input is decoded as UTF-8, each code point folded, and the result re-encoded; a byte that is not valid UTF-8 is copied as is.
+// Only the extraction's collision check uses it (foldKey stays ASCII-only for the other callers).
+std::string foldKeyUnicode(std::string_view path);
+
 // topSegment is one path segment (no slashes), compared case-insensitively.
 // "apps", case-insensitive (a single segment).
 bool isAppsRoot(std::string_view topSegment);

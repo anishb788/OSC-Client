@@ -1,6 +1,7 @@
 # Native Linux build of OpenShop for fast UI iteration (mouse = Wii Remote pointer).
 # Requires: libsdl2-dev libsdl2-ttf-dev libsdl2-mixer-dev libjansson-dev libsdl2-image-dev libzip-dev
-# Link rule: every binary that links src/catalog/Catalog.cpp must also link src/catalog/ArchiveUrl.cpp
+# Link rule: every binary that links src/catalog/Catalog.cpp must also link src/catalog/ArchiveUrl.cpp,
+# src/core/NameRules.cpp and src/install/Rules.cpp
 # (installRefusal() calls oscapi::isAllowedDownloadUrl).
 CXX      ?= g++
 BUILD    := build-pc
@@ -88,8 +89,8 @@ $(BUILD)/tobj/%.o: %.cpp $(STAMP)
 	$(CXX) $(TESTCXX) -c $< -o $@
 
 NETSRCS := src/net/HttpTransfer.cpp src/net/HttpPosix.cpp src/net/HttpParse.cpp src/net/Sinks.cpp src/core/FileUtil.cpp
-ICONSRCS := src/gfx/IconCache.cpp src/gfx/IconPng.cpp src/gfx/IconStore.cpp src/catalog/Catalog.cpp src/catalog/ArchiveUrl.cpp src/net/Worker.cpp $(NETSRCS)
-LOADERSRCS := src/catalog/NetLoader.cpp src/catalog/CatalogLoader.cpp src/catalog/MockLoader.cpp src/catalog/MockCatalog.cpp src/core/DevOptions.cpp src/catalog/OscApi.cpp src/catalog/CatalogCache.cpp src/catalog/Catalog.cpp src/catalog/ArchiveUrl.cpp src/net/Worker.cpp $(NETSRCS)
+ICONSRCS := src/gfx/IconCache.cpp src/gfx/IconPng.cpp src/gfx/IconStore.cpp src/catalog/Catalog.cpp src/core/NameRules.cpp src/install/Rules.cpp src/catalog/ArchiveUrl.cpp src/net/Worker.cpp $(NETSRCS)
+LOADERSRCS := src/catalog/NetLoader.cpp src/catalog/CatalogLoader.cpp src/catalog/MockLoader.cpp src/catalog/MockCatalog.cpp src/core/DevOptions.cpp src/catalog/OscApi.cpp src/catalog/CatalogCache.cpp src/catalog/Catalog.cpp src/core/NameRules.cpp src/install/Rules.cpp src/catalog/ArchiveUrl.cpp src/net/Worker.cpp $(NETSRCS)
 
 # Vendored C sources used by tests (the MD5), with the app's C flags.
 $(BUILD)/tobj/%.o: %.c $(STAMP)
@@ -99,7 +100,7 @@ $(BUILD)/tobj/%.o: %.c $(STAMP)
 # name -> sources (tests/<name>.cpp is added automatically) and extra link libraries.
 TESTS := catalog_test core_test topbar_test layout_test http_parse_test http_transfer_test http_posix_test worker_test \
          nettest_script_test oscapi_test netloader_test cache_test wrap_test httpget gfx_test icon_test install_test fileutil_test
-SRCS_catalog_test        := src/catalog/Catalog.cpp src/catalog/ArchiveUrl.cpp src/catalog/MockCatalog.cpp
+SRCS_catalog_test        := src/catalog/Catalog.cpp src/core/NameRules.cpp src/install/Rules.cpp src/catalog/ArchiveUrl.cpp src/catalog/MockCatalog.cpp
 SRCS_core_test           := src/core/DevOptions.cpp
 SRCS_topbar_test         :=
 SRCS_layout_test         :=
@@ -112,11 +113,11 @@ LIBS_worker_test         := $(SDLLIBS)
 # NetSelfTest.cpp references the worker, so those sources are linked too.
 SRCS_nettest_script_test := src/net/NetSelfTest.cpp src/net/Worker.cpp $(NETSRCS)
 LIBS_nettest_script_test := $(SDLLIBS)
-SRCS_oscapi_test         := src/catalog/OscApi.cpp src/catalog/Catalog.cpp src/catalog/ArchiveUrl.cpp
+SRCS_oscapi_test         := src/catalog/OscApi.cpp src/catalog/Catalog.cpp src/core/NameRules.cpp src/install/Rules.cpp src/catalog/ArchiveUrl.cpp
 LIBS_oscapi_test         := $(JANSSONLIBS)
 SRCS_netloader_test      := $(LOADERSRCS)
 LIBS_netloader_test      := $(SDLLIBS) $(JANSSONLIBS)
-SRCS_cache_test          := src/catalog/CatalogCache.cpp src/core/FileUtil.cpp src/catalog/OscApi.cpp src/catalog/Catalog.cpp src/catalog/ArchiveUrl.cpp
+SRCS_cache_test          := src/catalog/CatalogCache.cpp src/core/FileUtil.cpp src/catalog/OscApi.cpp src/catalog/Catalog.cpp src/core/NameRules.cpp src/install/Rules.cpp src/catalog/ArchiveUrl.cpp
 LIBS_cache_test          := $(JANSSONLIBS)
 SRCS_wrap_test           :=
 # Dev tool, built by `make test` but not run (it needs a URL). See the header comment in the file.
@@ -130,8 +131,8 @@ SRCS_icon_test           := $(ICONSRCS)
 LIBS_icon_test           := $(SDLLIBS) $(shell pkg-config --libs SDL2_image) -lz
 
 # M3: the pure install modules. MD5 is the vendored C file; libzip is linked from Increment 1 (zip_libzip_version).
-SRCS_install_test        := src/third_party/md5/md5.c src/install/AppsDevice.cpp src/core/FileUtil.cpp src/core/DevOptions.cpp
-LIBS_install_test        := $(shell pkg-config --libs libzip)
+SRCS_install_test        := src/third_party/md5/md5.c src/install/AppsDevice.cpp src/install/Version.cpp src/install/MetaXml.cpp src/core/FileUtil.cpp src/core/DevOptions.cpp src/catalog/OscApi.cpp src/catalog/Catalog.cpp src/core/NameRules.cpp src/install/Rules.cpp src/catalog/ArchiveUrl.cpp
+LIBS_install_test        := $(shell pkg-config --libs libzip) $(JANSSONLIBS)
 SRCS_fileutil_test       := src/core/FileUtil.cpp
 
 define TESTRULE
@@ -159,7 +160,9 @@ devhooks-check: $(STAMP)
 		{ echo "devhooks-check: hook symbols missing with OPENSHOP_DEVHOOKS=1"; exit 1; }
 	$(CXX) $(TESTCXX) -DOPENSHOP_DEVHOOKS=1 -c src/catalog/Catalog.cpp -o $(DHDIR)/catalog.o
 	$(CXX) $(TESTCXX) -DOPENSHOP_DEVHOOKS=1 -c tests/devhooks_test.cpp -o $(DHDIR)/test.o
-	$(CXX) $(SANFLAGS) -pthread -o $(DHDIR)/devhooks_test $(DHDIR)/test.o $(DHDIR)/on.o $(DHDIR)/catalog.o
+	$(CXX) $(TESTCXX) -c src/core/NameRules.cpp -o $(DHDIR)/namerules.o
+	$(CXX) $(TESTCXX) -c src/install/Rules.cpp -o $(DHDIR)/rules.o
+	$(CXX) $(SANFLAGS) -pthread -o $(DHDIR)/devhooks_test $(DHDIR)/test.o $(DHDIR)/on.o $(DHDIR)/catalog.o $(DHDIR)/namerules.o $(DHDIR)/rules.o
 	$(DHDIR)/devhooks_test
 
 test: $(TESTBINS) devhooks-check

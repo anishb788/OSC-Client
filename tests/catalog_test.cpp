@@ -131,6 +131,12 @@ static void testInstallable() {
 	CHECK(refusal([](AppEntry& e) { e.subdirectories.clear(); }) == InstallRefusal::NoAppDir);
 	CHECK(refusal([](AppEntry& e) { e.subdirectories = {"/private/wii", "/apps", "/apps/"}; }) == InstallRefusal::NoAppDir);
 	CHECK(refusal([](AppEntry& e) { e.subdirectories = {"/private/wii", "/apps/y"}; }) == InstallRefusal::None);
+	// OpenShop's own folder (any case) and the other dropped hints do not count as an app dir.
+	CHECK(refusal([](AppEntry& e) { e.subdirectories = {"/apps/OpenShop"}; }) == InstallRefusal::NoAppDir);
+	CHECK(refusal([](AppEntry& e) { e.subdirectories = {"/APPS/openshop/x", "/__MACOSX", "/apps/Title"}; }) == InstallRefusal::None);
+	CHECK(refusal([](AppEntry& e) { e.subdirectories = {"/apps/OpenShop/x", "/apps/openshop", "/title/x", "/__MACOSX/apps/z"}; }) ==
+	      InstallRefusal::NoAppDir);
+	CHECK(refusal([](AppEntry& e) { e.subdirectories = {"/apps/OpenShop", "/apps/y"}; }) == InstallRefusal::None);
 }
 
 static void testSearch() {

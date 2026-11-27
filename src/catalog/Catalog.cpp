@@ -7,6 +7,7 @@
 
 #include "catalog/OscApi.h"
 #include "core/Strings.h"
+#include "install/Rules.h"
 
 namespace {
 using strutil::lowerAscii;
@@ -89,20 +90,11 @@ InstallRefusal AppEntry::installRefusal() const {
 	if (archiveSize > kMaxArchiveBytes) return InstallRefusal::ArchiveTooLarge;
 	if (uncompressedSize == 0) return InstallRefusal::BadInstallSize;
 	if (uncompressedSize > kMaxInstallBytes) return InstallRefusal::InstallTooLarge;
-	// TODO(Increment 3, filterSubdirHint): ignore OpenShop's own /apps/OpenShop hints here; today one counts as an app dir.
-	bool appDir = std::any_of(subdirectories.begin(), subdirectories.end(),
+	// Hints extraction would never write ("/apps", system roots, OpenShop's own folder, junk) do not count as an app dir.
+	const std::vector<std::string> hints = install::filterSubdirHint(subdirectories);
+	bool appDir = std::any_of(hints.begin(), hints.end(),
 	                          [](const std::string& d) { return d.size() > 6 && d.compare(0, 6, "/apps/") == 0; });
 	return appDir ? InstallRefusal::None : InstallRefusal::NoAppDir;
-}
-
-bool isReservedDeviceName(std::string_view name) {
-	// Windows treats everything from the first dot as an extension; trailing spaces before it are dropped too.
-	size_t dot = name.find('.');
-	if (dot != std::string_view::npos) name = name.substr(0, dot);
-	while (!name.empty() && name.back() == ' ') name.remove_suffix(1);
-	std::string l = lowerAscii(std::string(name));
-	if (l == "con" || l == "prn" || l == "aux" || l == "nul") return true;
-	return l.size() == 4 && (l.compare(0, 3, "com") == 0 || l.compare(0, 3, "lpt") == 0) && l[3] >= '1' && l[3] <= '9';
 }
 
 bool isHttpUrl(std::string_view url) {
@@ -118,15 +110,6 @@ bool isHttpUrl(std::string_view url) {
 	if (!starts("http://") && !starts("https://")) return false;
 	for (char ch : url.substr(pre)) {
 		if ((unsigned char)ch <= 0x20 || ch == 0x7F) return false;
-	}
-	return true;
-}
-
-bool isValidSlug(std::string_view slug) {
-	if (slug.empty() || slug.size() > kMaxSlugLength || slug[0] == '.' || slug.back() == '.') return false;
-	if (isReservedDeviceName(slug)) return false;
-	for (char c : slug) {
-		if (!(std::isalnum((unsigned char)c) && (unsigned char)c < 0x80) && c != '.' && c != '_' && c != '-') return false;
 	}
 	return true;
 }

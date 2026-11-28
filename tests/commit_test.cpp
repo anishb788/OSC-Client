@@ -285,10 +285,16 @@ static State classify(const std::string& root, const char* what) {
 	return State::Broken;
 }
 
+static CleanGuard guardFor(const Dev& d, const std::string& root) {
+	CleanGuard g;
+	g.device = root == d.usb ? "usb" : "sd";
+	return g;
+}
+
 // Recovery leaves staging for Increment 7's Cleanup job (user decision 2026-11-27), so "settled" runs cleanStaging the way that job will.
 static bool settled(const Dev& d, const std::string& root) {
 	CHECK(!there(root + "/apps/OpenShop/installed/.journal"));
-	CHECK(cleanStaging(root, d.removeRoots));
+	CHECK(cleanStaging(root, d.removeRoots, guardFor(d, root)));
 	CHECK(kids(stagingBase(root)) == 0);
 	return !there(root + "/apps/OpenShop/installed/.journal") && kids(stagingBase(root)) == 0;
 }
@@ -726,7 +732,7 @@ static void testRecoveryRoots() {
 	// Start-up recovery never bulk-deletes staging (user decision 2026-11-27): the finished sd job's staging (its old/ tree is
 	// the Cleanup job's to remove), the usb job's leftover root/ and a journal-less folder are all still there.
 	CHECK(there(stagingAbs(d.sd, 5) + "/manifest.json") && there(stagingAbs(d.usb, 9) + "/root/apps/zzz/boot.dol") && there(stagingAbs(d.usb, 10) + "/junk"));
-	CHECK(cleanStaging(d.usb, d.removeRoots) && cleanStaging(d.sd, d.removeRoots) && kids(stagingBase(d.usb)) == 0 && kids(stagingBase(d.sd)) == 0);
+	CHECK(cleanStaging(d.usb, d.removeRoots, guardFor(d, d.usb)) && cleanStaging(d.sd, d.removeRoots, guardFor(d, d.sd)) && kids(stagingBase(d.usb)) == 0 && kids(stagingBase(d.sd)) == 0);
 	// nothing left: nothing happens
 	CHECK(recover(rootsOf(d))[0].outcome == RecoveryOutcome::Nothing);
 }
@@ -777,7 +783,7 @@ static void testStagingCleanupStaysInside() {
 	put(d.sd + "/apps/OpenShop/staging/stray-file", "s");
 	CHECK(symlink((d.sd + "/outside").c_str(), (stagingAbs(d.sd, 7) + "/root/link").c_str()) == 0);
 	CHECK(symlink((d.sd + "/apps/Foo").c_str(), (d.sd + "/apps/OpenShop/staging/toplink").c_str()) == 0);
-	CHECK(cleanStaging(d.sd, d.removeRoots));
+	CHECK(cleanStaging(d.sd, d.removeRoots, guardFor(d, d.sd)));
 	CHECK(kids(stagingBase(d.sd)) == 0);
 	CHECK(get(d.sd + "/outside/precious") == "p");
 	CHECK(get(d.sd + "/apps/Foo/boot.dol") == "app");
@@ -785,8 +791,74 @@ static void testStagingCleanupStaysInside() {
 	CHECK(get(d.sd + "/apps/OpenShop/staging2/keep") == "k");
 	// bad roots refuse: nothing is removed
 	put(stagingAbs(d.sd, 8) + "/root/a", "a");
-	CHECK(!cleanStaging(d.sd, {}));
+	CHECK(!cleanStaging(d.sd, {}, guardFor(d, d.sd)));
 	CHECK(there(stagingAbs(d.sd, 8) + "/root/a"));
+}
+
+// The Cleanup guard (Increment 7): journal-named dir, active jobs, unclear journals, stop.
+static void testCleanGuard() {
+	// a start-phase journal naming job 4: staging/4 stays, the others go
+	{
+		Dev d;
+		CHECK(writeStartJournal(d.sd, "sd", 4, JournalKind::Install, "foo"));
+		put(stagingAbs(d.sd, 4) + "/root/a", "a");
+		put(stagingAbs(d.sd, 5) + "/root/b", "b");
+		put(d.sd + "/apps/OpenShop/staging/stray", "s");
+		CleanStats cs;
+		CHECK(cleanStaging(d.sd, d.removeRoots, guardFor(d, d.sd), {}, &cs));
+		CHECK(cs.skippedJournal == 1 && cs.removed == 2);
+		CHECK(there(stagingAbs(d.sd, 4) + "/root/a") && !there(stagingAbs(d.sd, 5)) && !there(d.sd + "/apps/OpenShop/staging/stray"));
+	}
+	// active job ids are skipped
+	{
+		Dev d;
+		put(stagingAbs(d.sd, 7) + "/root/a", "a");
+		put(stagingAbs(d.sd, 8) + "/root/a", "a");
+		CleanGuard g = guardFor(d, d.sd);
+		g.activeJobIds = {7};
+		CleanStats cs;
+		CHECK(cleanStaging(d.sd, d.removeRoots, g, {}, &cs));
+		CHECK(cs.skippedActive == 1 && cs.removed == 1 && there(stagingAbs(d.sd, 7) + "/root/a") && !there(stagingAbs(d.sd, 8)));
+	}
+	// a corrupt journal, a journal for the other device and a journal that cannot be told from absent: NOTHING is removed
+	{
+		Dev d;
+		put(stagingAbs(d.sd, 3) + "/old/x", "precious");
+		put(d.sd + "/apps/OpenShop/installed/.journal", "{not json");
+		CleanStats cs;
+		CHECK(!cleanStaging(d.sd, d.removeRoots, guardFor(d, d.sd), {}, &cs));
+		CHECK(cs.journalUnclear && cs.removed == 0 && get(stagingAbs(d.sd, 3) + "/old/x") == "precious");
+		writeStartJournal(d.usb, "usb", 6, JournalKind::Install, "x");
+		put(d.sd + "/apps/OpenShop/installed/.journal", get(d.usb + "/apps/OpenShop/installed/.journal"));
+		CHECK(!cleanStaging(d.sd, d.removeRoots, guardFor(d, d.sd)));
+		CHECK(get(stagingAbs(d.sd, 3) + "/old/x") == "precious");
+	}
+	{
+		Dev d;
+		put(stagingAbs(d.sd, 3) + "/old/x", "precious");
+		FileOps o;
+		o.stat = hStatJournalErr;
+		CleanStats cs;
+		CHECK(!cleanStaging(d.sd, d.removeRoots, guardFor(d, d.sd), o, &cs));
+		CHECK(cs.journalUnclear && get(stagingAbs(d.sd, 3) + "/old/x") == "precious");
+		CHECK(cleanStaging(d.sd, d.removeRoots, guardFor(d, d.sd)) && !there(stagingAbs(d.sd, 3)));
+	}
+	// stop() ends the run early
+	{
+		Dev d;
+		put(stagingAbs(d.sd, 1) + "/a", "a");
+		put(stagingAbs(d.sd, 2) + "/a", "a");
+		CleanGuard g = guardFor(d, d.sd);
+		g.stop = [] { return true; };
+		CleanStats cs;
+		CHECK(!cleanStaging(d.sd, d.removeRoots, g, {}, &cs));
+		CHECK(cs.stopped && cs.removed == 0 && there(stagingAbs(d.sd, 1) + "/a"));
+	}
+	// no staging folder at all: fine
+	{
+		Dev d;
+		CHECK(cleanStaging(d.sd, d.removeRoots, guardFor(d, d.sd)));
+	}
 }
 
 static void testBrokenStagedManifestRollsBack() {
@@ -1090,6 +1162,12 @@ static void testReadErrorsAreNotAbsence() {
 		const std::vector<RootRecovery> r = recover(rootsOf(d, false), o);
 		CHECK(r[0].outcome == RecoveryOutcome::Failed);
 		CHECK(there(d.sd + "/apps/OpenShop/installed/.journal") && there(stagingAbs(d.sd, 2) + "/old/apps/Foo/saves/a.sav"));
+		// Increment 7's guard: the Cleanup job after a Failed recovery leaves the dir the journal names alone (and removes the others)
+		put(stagingAbs(d.sd, 99) + "/junk", "j");
+		CleanStats cs;
+		CHECK(cleanStaging(d.sd, d.removeRoots, guardFor(d, d.sd), {}, &cs));
+		CHECK(cs.skippedJournal == 1 && cs.removed == 1 && !there(stagingAbs(d.sd, 99)));
+		CHECK(there(d.sd + "/apps/OpenShop/installed/.journal") && there(stagingAbs(d.sd, 2) + "/old/apps/Foo/saves/a.sav"));
 		CHECK(recover(rootsOf(d, false))[0].outcome == RecoveryOutcome::RolledForward);
 	}
 	// readFileCapped: only ENOENT/ENOTDIR is Missing
@@ -1292,6 +1370,7 @@ int main(int argc, char** argv) {
 	testRecoveryRoots();
 	testCorruptAndForeign();
 	testStagingCleanupStaysInside();
+	testCleanGuard();
 	testBrokenStagedManifestRollsBack();
 	testCraftedJournals();
 	testRestoreNeitherSide();

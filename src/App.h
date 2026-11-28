@@ -14,6 +14,7 @@
 #include "gfx/IconCache.h"
 #include "gfx/Text.h"
 #include "install/AppsDevice.h"
+#include "install/Jobs.h"
 #include "net/NetSelfTest.h"
 #include "net/Worker.h"
 #include "ui/Ui.h"
@@ -133,6 +134,9 @@ public:
 		return appsDevice_.set(dev, reason);
 	}
 	install::AppsDeviceSetting& appsDeviceSetting() { return appsDevice_; }
+	// The job system (Increment 7). Owned here, so it outlives every screen and every Refresh (resetTo and refreshCatalog() never
+	// touch it). Main thread only; screens read jobs().snapshot() and never hold anything from it across frames.
+	install::Jobs& jobs() { return jobs_; }
 	void quit() { quitRequested = true; }
 	// A dialog opened while the LoadingScreen is on top (App's HOME menu) must never capture `AppEntry` pointers or
 	// references: the catalog may be replaced underneath it, and the handover to Home waits for the dialog.
@@ -163,6 +167,8 @@ private:
 
 	Catalog catalog_;
 	install::AppsDeviceSetting appsDevice_;
+	// Declared before worker_: shutdown() stops it explicitly and first; the install worker does disk work only.
+	install::Jobs jobs_;
 	net::Worker worker_{net::defaultTransportFactory()};
 	// Declared after the worker: its jobs only hold shared state, but it is destroyed (textures freed) first anyway.
 	std::unique_ptr<IconCache> icons_;

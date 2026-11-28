@@ -24,11 +24,13 @@
 //   a failed recovery     the journal and staging stay for the next start; logged.
 // A root that is not mounted is skipped without a word: its journal and staging wait for a start where it is present.
 //
-// cleanStaging (for Increment 7's Cleanup job) only ever removes under <root>/apps/OpenShop/staging (FileUtil::removeTree's
-// mustBeUnder). It must run with the same rules: every staging dir is removable once no journal names it (finished or
-// abandoned); a staging dir with no journal is abandoned. A job id must not be reused while its staging dir exists
-// (freshJobId in Commit.h).
+// cleanStaging (Increment 7's Cleanup job) only ever removes under <root>/apps/OpenShop/staging (FileUtil::removeTree's
+// mustBeUnder). Every staging dir is removable once no journal names it (finished or abandoned); a staging dir with no journal is
+// abandoned. It has its own guard (CleanGuard below), so it is safe even when called on a root whose recovery answered LeftAlone
+// or Failed. A job id must not be reused while its staging dir exists (freshJobId in Commit.h).
 #pragma once
+#include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -59,9 +61,34 @@ struct RootRecovery {
 
 const char* describe(RecoveryOutcome o);
 
-// Removes every entry under <root>/apps/OpenShop/staging. True when none is left (a folder that is cleanly absent counts; one that
-// cannot be checked or listed does not).
-bool cleanStaging(const std::string& root, const std::vector<std::string>& removeRoots, const FileOps& ops = {});
+// The guard of the Cleanup job (M3 Increment 7; the re-review of 2026-11-27 asked for it). cleanStaging removes every staging entry
+// EXCEPT:
+//   - the job dir that a journal on this root names (a LeftAlone or Failed recovery keeps its journal, and the parked old app is
+//     behind it). The journal is read ONCE per call with loadJournal; the dirs are only removable when it is cleanly Missing
+//     (presenceOf says Absent for ".journal" and ".journal.bak"). A Corrupt, unreadable, foreign or unverifiable journal means
+//     "cannot tell which dir it names": NOTHING is removed and the call answers false;
+//   - the job ids in `activeJobIds` (a job that is queued or running right now).
+struct CleanGuard {
+	std::string device;                 // "sd" | "usb": the device `root` is (a journal for the other device is Corrupt)
+	std::vector<int64_t> activeJobIds;  // staging dirs of live jobs
+	std::function<bool()> stop;         // optional: polled between entries AND per entry inside each dir (removeTree's stop); true ends the
+	                                    // run early (a cancelled Cleanup job): a dir may stay partly deleted, which the next run finishes
+};
+struct CleanStats {
+	int removed = 0;
+	int skippedJournal = 0; // the dir a journal names
+	int skippedActive = 0;
+	int failed = 0;
+	bool journalUnclear = false; // the journal could not be read or told from "absent": nothing was removed
+	bool stopped = false;
+};
+
+// Removes the entries of <root>/apps/OpenShop/staging that the guard allows (only ever under that folder: FileUtil::removeTree's
+// mustBeUnder). True when nothing that should have gone is left: a folder that is cleanly absent counts, one that cannot be
+// checked or listed, an unclear journal and a failed removal do not; a dir skipped by the guard is not a failure. A failed removal is
+// only logged (the next start retries).
+bool cleanStaging(const std::string& root, const std::vector<std::string>& removeRoots, const CleanGuard& guard, const FileOps& ops = {},
+                  CleanStats* stats = nullptr);
 
 // `roots` are the MOUNTED roots (the caller filters). Recovery removes nothing but the journal, so it needs no removeTree roots.
 std::vector<RootRecovery> recover(const std::vector<RecoveryRoot>& roots, const FileOps& ops = {});

@@ -21,6 +21,7 @@
 #include "catalog/Catalog.h"
 #include "catalog/OscApi.h"
 #include "install/AppsDevice.h"
+#include "install/JobQueue.h"
 #include "install/Journal.h"
 #include "install/Manifest.h"
 #include "install/MetaXml.h"
@@ -1924,6 +1925,188 @@ static void testRecordCuts() {
 	}
 }
 
+// ---- Increment 7: the pure job queue ---------------------------------------------------------------------------------------------
+static JobSpec specOf(const std::string& slug) {
+	JobSpec s;
+	s.slug = slug;
+	s.name = slug;
+	return s;
+}
+// Runs the head to completion the way Jobs does.
+static JobId startHead(JobQueue& q) {
+	const JobEntry* n = q.nextToStart();
+	if (!n) return 0;
+	const JobId id = n->id;
+	CHECK(q.markStarted(id));
+	return id;
+}
+
+static void testJobQueue() {
+	JobQueue q;
+	CHECK(!q.busy() && q.activeCount() == 0 && q.nextToStart() == nullptr && q.nextQueued() == 0);
+	// FIFO, one at a time
+	const JobId a = q.add(JobKind::Install, specOf("a")), b = q.add(JobKind::Install, specOf("b")), c = q.add(JobKind::Update, specOf("c"));
+	const JobId d = q.add(JobKind::Delete, specOf("d")); // a Delete queued behind the installs
+	CHECK(a && b && c && d && a < b && b < c && c < d);
+	CHECK(q.activeCount() == 4 && q.userActiveCount() == 4 && q.busy());
+	CHECK(q.position(a) == 0 && q.position(b) == 1 && q.position(c) == 2 && q.position(d) == 3 && q.position(999) == -1);
+	CHECK(q.nextQueued() == a && q.nextToStart() && q.nextToStart()->id == a);
+	CHECK(!q.markStarted(b)); // only the head can start
+	CHECK(startHead(q) == a);
+	CHECK(q.running() && q.running()->id == a && q.nextToStart() == nullptr); // one at a time
+	CHECK(q.nextQueued() == b && q.position(a) == 0 && q.position(b) == 1);
+	CHECK(q.find(a)->state == JobState::Installing);
+	q.find(a)->cell->setStage(Stage::Downloading);
+	q.syncRunning();
+	CHECK(q.find(a)->state == JobState::Downloading);
+	q.find(a)->cell->setStage(Stage::Verifying);
+	q.syncRunning();
+	CHECK(q.find(a)->state == JobState::Verifying);
+	CHECK(q.finish(a, JobState::Done, ""));
+	CHECK(q.history().size() == 1 && q.history()[0].id == a && q.history()[0].state == JobState::Done);
+	CHECK(q.activeCount() == 3 && q.nextToStart() && q.nextToStart()->id == b);
+	// cancelling a queued job removes it: no history, no running entry
+	CHECK(q.cancel(c));
+	CHECK(q.find(c) == nullptr && q.activeCount() == 2 && q.history().size() == 1);
+	CHECK(!q.cancel(c)); // gone
+	// cancelling the running job: Cancelled at once, the entry stays until the worker is done, no history entry
+	CHECK(startHead(q) == b);
+	CHECK(q.cancel(b));
+	CHECK(q.find(b)->state == JobState::Cancelled && q.find(b)->cell->cancelled());
+	CHECK(q.nextToStart() == nullptr); // d waits for the worker to let go of b
+	CHECK(!q.cancel(b) && !q.remove(b)); // already cancelled; a running entry cannot be removed
+	q.syncRunning();
+	CHECK(q.find(b)->state == JobState::Cancelled); // the stage cannot revive it
+	CHECK(q.finish(b, JobState::Done, "")); // the worker raced to Done: still Cancelled
+	CHECK(q.find(b) == nullptr && q.history().size() == 1);
+	CHECK(q.nextToStart() && q.nextToStart()->id == d && q.busy());
+	// a job in commit cannot be cancelled
+	CHECK(startHead(q) == d);
+	CHECK(q.find(d)->cell->enterCommit() && q.find(d)->cell->inCommit());
+	CHECK(!q.cancel(d) && q.find(d)->state != JobState::Cancelled && !q.find(d)->cell->cancelled());
+	CHECK(q.finish(d, JobState::Failed, "boom"));
+	CHECK(q.history().size() == 2 && q.history()[0].id == d && q.history()[0].state == JobState::Failed && q.history()[0].error == "boom");
+	CHECK(!q.busy() && q.activeCount() == 0);
+	// and a cancelled job cannot begin to commit
+	{
+		const JobId e = q.add(JobKind::Install, specOf("e"));
+		CHECK(startHead(q) == e && q.cancel(e));
+		CHECK(!q.find(e)->cell->enterCommit());
+		CHECK(q.finish(e, JobState::Cancelled, ""));
+	}
+	// remove: a history entry, a queued job; not a running one
+	const JobId f = q.add(JobKind::Install, specOf("f")), g = q.add(JobKind::Install, specOf("g"));
+	CHECK(q.remove(g) && q.find(g) == nullptr);
+	CHECK(startHead(q) == f && !q.remove(f));
+	CHECK(q.finish(f, JobState::Done, ""));
+	CHECK(q.remove(f) && q.history().size() == 2); // out of the history
+	CHECK(!q.remove(f));
+	// retry: only a Failed history entry, with the re-resolved spec, same kind; the old entry goes
+	const JobId failedId = q.history()[0].id;
+	CHECK(q.history()[0].state == JobState::Failed && q.history()[0].kind == JobKind::Delete);
+	CHECK(q.retry(a, specOf("a2")) == 0); // a is Done
+	const JobId r = q.retry(failedId, specOf("d2"));
+	CHECK(r != 0 && r != failedId && q.find(failedId) == nullptr && q.find(r)->kind == JobKind::Delete && q.find(r)->spec.slug == "d2");
+	CHECK(q.find(r)->state == JobState::Queued && q.position(r) == 0 && q.history().size() == 1);
+	CHECK(q.retry(r, specOf("x")) == 0 && q.retry(12345, specOf("x")) == 0);
+	// clearFinished
+	CHECK(q.history().size() == 1);
+	q.clearFinished();
+	CHECK(q.history().empty() && q.activeCount() == 1);
+	CHECK(q.cancel(r) && !q.busy());
+}
+
+static void testJobQueueHistoryAndCounts() {
+	JobQueue q;
+	// history capped at 20, newest kept
+	std::vector<JobId> ids;
+	for (int i = 0; i < 25; i++) {
+		const JobId id = q.add(JobKind::Install, specOf("app" + std::to_string(i)));
+		ids.push_back(id);
+		CHECK(startHead(q) == id);
+		CHECK(q.finish(id, i % 3 == 0 ? JobState::Failed : JobState::Done, "e"));
+	}
+	CHECK(q.history().size() == kHistoryMax && kHistoryMax == 20);
+	CHECK(q.history().front().id == ids[24] && q.history().back().id == ids[5]); // ids 0..4 fell off
+	CHECK(q.find(ids[4]) == nullptr && q.find(ids[5]) != nullptr);
+	// internal jobs: counted in the line, never in the history, and Cleanup does not make the queue busy
+	JobQueue p;
+	const JobId cl = p.add(JobKind::Cleanup, specOf(""));
+	CHECK(p.activeCount() == 1 && p.userActiveCount() == 0 && !p.busy());
+	const JobId sc = p.add(JobKind::Scan, specOf(""));
+	CHECK(p.activeCount() == 2 && p.userActiveCount() == 0 && p.busy()); // a Scan does block switching the device
+	CHECK(startHead(p) == cl && p.finish(cl, JobState::Done, ""));
+	CHECK(startHead(p) == sc && p.finish(sc, JobState::Failed, "x"));
+	CHECK(p.history().empty() && p.activeCount() == 0);
+	// a mix: counts, position, next in the queue
+	const JobId s1 = p.add(JobKind::Sleep, specOf("s1")), s2 = p.add(JobKind::Sleep, specOf("s2")), s3 = p.add(JobKind::Sleep, specOf("s3"));
+	CHECK(p.nextQueued() == s1);
+	CHECK(startHead(p) == s1);
+	CHECK(p.nextQueued() == s2 && p.position(s3) == 2 && p.activeCount() == 3);
+	// shutdown: queued jobs go, the running one is cancelled, the answer says whether one could not be
+	CHECK(!p.cancelAll());
+	CHECK(p.activeCount() == 1 && p.find(s1)->state == JobState::Cancelled && p.find(s2) == nullptr);
+	CHECK(p.finish(s1, JobState::Cancelled, "") && p.activeCount() == 0);
+	const JobId s4 = p.add(JobKind::Sleep, specOf("s4"));
+	CHECK(startHead(p) == s4 && p.find(s4)->cell->enterCommit());
+	CHECK(p.cancelAll()); // committing: stuck
+	CHECK(p.find(s4)->state != JobState::Cancelled);
+	// positions and "next" count USER jobs only (review M1): Cleanup ahead of a user job does not push it back
+	JobQueue u;
+	const JobId uc = u.add(JobKind::Cleanup, specOf("")), u1 = u.add(JobKind::Install, specOf("u1")), us = u.add(JobKind::Scan, specOf("")),
+	            u2 = u.add(JobKind::Install, specOf("u2"));
+	CHECK(u.activeCount() == 4 && u.userActiveCount() == 2);
+	CHECK(u.position(uc) == -1 && u.position(us) == -1 && u.position(u1) == 0 && u.position(u2) == 1 && u.position(12345) == -1);
+	CHECK(u.nextQueued() == u1);
+	CHECK(startHead(u) == uc); // Cleanup is running; the first user job is still "next", not one behind
+	CHECK(u.nextQueued() == u1 && u.position(u1) == 0 && u.position(uc) == -1);
+	CHECK(u.finish(uc, JobState::Done, "") && startHead(u) == u1);
+	CHECK(u.nextQueued() == u2 && u.position(u1) == 0 && u.position(u2) == 1 && u.position(us) == -1);
+	// a cell whose runner has returned cannot be cancelled any more (review M6); cancelled and committing cells keep their phase
+	ProgressCell fin;
+	fin.markFinished();
+	CHECK(fin.finished() && !fin.requestCancel() && !fin.cancelled() && !fin.inCommit());
+	ProgressCell fc, fm;
+	CHECK(fc.requestCancel());
+	fc.markFinished();
+	CHECK(fc.cancelled() && !fc.finished());
+	CHECK(fm.enterCommit());
+	fm.markFinished();
+	CHECK(fm.inCommit() && !fm.finished() && !fm.requestCancel());
+	// ids keep growing; the cell saturates its 32-bit counters
+	const JobId s5 = p.add(JobKind::Sleep, specOf("s5"));
+	CHECK(s5 > s4);
+	ProgressCell cell;
+	cell.setProgress(6ull << 30, 5ull << 32);
+	CHECK(cell.done() == 0xFFFFFFFFu && cell.total() == 0xFFFFFFFFu);
+	CHECK(std::string(stageLabel(Stage::Cleaning)) == "Cleaning up" && stateForStage(Stage::Sleeping) == JobState::Installing &&
+	      stateForStage(Stage::Downloading) == JobState::Downloading);
+}
+
+static void testDevJobOptions() {
+	DevOptions o;
+	DevOptions::parseFile("devjobs=3\ndevjobms=200\ndevjobfail=1\ndevjobcommit=1\n", o);
+	CHECK(o.devJobs == 3 && o.devJobMs == 200 && o.devJobFail && o.devJobCommit);
+	CHECK(o.describe().find("devjobs=3") != std::string::npos && o.active().find("devjobfail=1") != std::string::npos);
+	DevOptions p;
+	DevOptions::parseFile("devjobs=abc\ndevjobs=-4\n", p);
+	CHECK(p.devJobs == 0 && p.active().find("devjobs") == std::string::npos);
+	CHECK(DevOptions().active().find("devjob") == std::string::npos);
+	// capped at 100 (review L9): in the devstart file and in the environment
+	DevOptions c;
+	DevOptions::parseFile("devjobs=100\n", c);
+	CHECK(c.devJobs == 100);
+	DevOptions::parseFile("devjobs=101\n", c);
+	CHECK(c.devJobs == 100);
+	DevOptions::parseFile("devjobs=999999\n", c);
+	CHECK(c.devJobs == 100 && DevOptions::kMaxDevJobs == 100);
+	setenv("OPENSHOP_DEVJOBS", "5000", 1);
+	CHECK(DevOptions::load("/nonexistent-openshop-dir").devJobs == 100);
+	setenv("OPENSHOP_DEVJOBS", "7", 1);
+	CHECK(DevOptions::load("/nonexistent-openshop-dir").devJobs == 7);
+	unsetenv("OPENSHOP_DEVJOBS");
+}
+
 int main() {
 	testMd5Vectors();
 	testMd5Chunked();
@@ -1958,5 +2141,8 @@ int main() {
 	testJournalConsistency();
 	testJournalSizeAndFlush();
 	testRecordCuts();
+	testJobQueue();
+	testJobQueueHistoryAndCounts();
+	testDevJobOptions();
 	return checkReport("install_test");
 }

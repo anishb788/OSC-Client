@@ -1,5 +1,6 @@
 #include "core/DevOptions.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 
@@ -79,11 +80,16 @@ void DevOptions::parseFile(const std::string& text, DevOptions& o) {
 		else if (key == "commitprobe") o.commitProbe = val;
 		else if (key == "commitprobe_files") o.commitProbeFiles = parseNonNegative(val);
 		else if (key == "commitprobe_stack") o.commitProbeStackKb = parseNonNegative(val);
+		else if (key == "claimprobe") o.claimProbe = truthy(val);
 		else if (key == "nettest") o.nettest = val;
 		else if (key == "nettestbg") o.nettestBg = val;
 		else if (key == "nettestquit") o.nettestQuit = truthy(val);
 		else if (key == "appsdevice") o.appsDevice = val;
 		else if (key == "appsdeviceswap") o.appsDeviceSwap = truthy(val);
+		else if (key == "devjobs") o.devJobs = std::clamp(parseNonNegative(val), 0, kMaxDevJobs);
+		else if (key == "devjobms") o.devJobMs = parseNonNegative(val);
+		else if (key == "devjobfail") o.devJobFail = truthy(val);
+		else if (key == "devjobcommit") o.devJobCommit = truthy(val);
 	}
 }
 
@@ -109,11 +115,16 @@ DevOptions DevOptions::load(const std::string& dataDir) {
 	if (const char* v = std::getenv("OPENSHOP_COMMITPROBE"); v && *v) o.commitProbe = trim(v);
 	if (const char* v = std::getenv("OPENSHOP_COMMITPROBE_FILES"); v && *v) o.commitProbeFiles = parseNonNegative(v);
 	if (const char* v = std::getenv("OPENSHOP_COMMITPROBE_STACK"); v && *v) o.commitProbeStackKb = parseNonNegative(v);
+	if (const char* v = std::getenv("OPENSHOP_CLAIMPROBE"); v && *v) o.claimProbe = truthy(v);
 	if (const char* v = std::getenv("OPENSHOP_NETTEST"); v && *v) o.nettest = v;
 	if (const char* v = std::getenv("OPENSHOP_NETTESTBG"); v && *v) o.nettestBg = v;
 	if (const char* v = std::getenv("OPENSHOP_NETTESTQUIT"); v && *v) o.nettestQuit = truthy(v);
 	if (const char* v = std::getenv("OPENSHOP_APPS_DEVICE"); v && *v) o.appsDevice = trim(v);
 	if (const char* v = std::getenv("OPENSHOP_APPS_DEVICE_SWAP"); v && *v) o.appsDeviceSwap = truthy(v);
+	if (const char* v = std::getenv("OPENSHOP_DEVJOBS"); v && *v) o.devJobs = std::clamp(parseNonNegative(v), 0, kMaxDevJobs);
+	if (const char* v = std::getenv("OPENSHOP_DEVJOBMS"); v && *v) o.devJobMs = parseNonNegative(v);
+	if (const char* v = std::getenv("OPENSHOP_DEVJOBFAIL"); v && *v) o.devJobFail = truthy(v);
+	if (const char* v = std::getenv("OPENSHOP_DEVJOBCOMMIT"); v && *v) o.devJobCommit = truthy(v);
 	return o;
 }
 
@@ -131,7 +142,11 @@ std::string DevOptions::describe() const {
 	       (commitProbe.empty() ? std::string() : " commitprobe=" + commitProbe) +
 	       (commitProbeFiles < 0 ? std::string() : " commitprobe_files=" + std::to_string(commitProbeFiles)) +
 	       (commitProbeStackKb < 0 ? std::string() : " commitprobe_stack=" + std::to_string(commitProbeStackKb)) +
+	       (claimProbe ? std::string(" claimprobe=1") : std::string()) +
 	       (appsDevice.empty() ? std::string() : " appsdevice=" + appsDevice) + (appsDeviceSwap ? std::string(" appsdeviceswap=1") : std::string()) +
+	       (devJobs > 0 ? " devjobs=" + std::to_string(devJobs) + (devJobMs >= 0 ? " devjobms=" + std::to_string(devJobMs) : std::string()) +
+	                          (devJobFail ? " devjobfail=1" : "") + (devJobCommit ? " devjobcommit=1" : "")
+	                    : std::string()) +
 	       (nettest.empty() && nettestBg.empty() ? std::string() : " nettest=" + nettest + " nettestbg=" + nettestBg + " nettestquit=" + (nettestQuit ? "1" : "0"));
 }
 
@@ -157,8 +172,13 @@ std::string DevOptions::active() const {
 	if (!commitProbe.empty()) add("commitprobe=" + commitProbe);
 	if (commitProbeFiles >= 0) add("commitprobe_files=" + std::to_string(commitProbeFiles));
 	if (commitProbeStackKb >= 0) add("commitprobe_stack=" + std::to_string(commitProbeStackKb));
+	if (claimProbe) add("claimprobe=1");
 	if (!appsDevice.empty()) add("appsdevice=" + appsDevice);
 	if (appsDeviceSwap) add("appsdeviceswap=1");
+	if (devJobs > 0) add("devjobs=" + std::to_string(devJobs));
+	if (devJobs > 0 && devJobMs >= 0) add("devjobms=" + std::to_string(devJobMs));
+	if (devJobs > 0 && devJobFail) add("devjobfail=1");
+	if (devJobs > 0 && devJobCommit) add("devjobcommit=1");
 	if (!nettest.empty() || !nettestBg.empty() || nettestQuit) add("nettest=" + nettest + " nettestbg=" + nettestBg);
 	return out;
 }

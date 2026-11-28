@@ -285,6 +285,13 @@ bool rootsOk(const std::vector<std::string>& roots, std::string& why) {
 struct Remover {
 	const Fs& fs;
 	RemoveResult& res;
+	const std::function<bool()>* stop = nullptr;
+	// Polled before each entry. Once true it stays true (res.stopped), and every level unwinds without touching anything more.
+	bool halt() {
+		if (res.stopped) return true;
+		if (stop && *stop && (*stop)()) res.stopped = true;
+		return res.stopped;
+	}
 	void fail(const std::string& what, const std::string& path) {
 		res.errors++;
 		if (res.error.empty()) res.error = what + ": " + path;
@@ -307,12 +314,14 @@ struct Remover {
 		if (!fs.list(path, names)) { fail("cannot list", path); return; }
 		std::sort(names.begin(), names.end());
 		for (const std::string& n : names) {
+			if (halt()) return;
 			if (badName(n)) {
 				fail("bad entry name", path);
 				continue;
 			}
 			walk(path + "/" + n, depth + 1);
 		}
+		if (res.stopped) return; // a smaller, ordinary tree stays; the rmdir would only fail
 		if (fs.rmdir(path.c_str()) == 0) res.dirs++;
 		else fail("rmdir failed", path);
 	}
@@ -344,6 +353,7 @@ void fdWalkContents(Remover& rm, int dirfd, const std::string& path, int depth, 
 	std::sort(names.begin(), names.end());
 	if (hook) hook(path);
 	for (const std::string& n : names) {
+		if (rm.halt()) break;
 		if (rm.badName(n)) { rm.fail("bad entry name", path); continue; }
 		const std::string child = path + "/" + n;
 		struct stat st;
@@ -360,6 +370,7 @@ void fdWalkContents(Remover& rm, int dirfd, const std::string& path, int depth, 
 		const int sub = ::openat(dirfd, n.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
 		if (sub < 0) { rm.fail("cannot open", child); continue; } // includes "swapped for a symlink" (ELOOP)
 		fdWalkContents(rm, sub, child, depth + 1, hook);
+		if (rm.res.stopped) break;
 		if (::unlinkat(dirfd, n.c_str(), AT_REMOVEDIR) == 0) rm.res.dirs++;
 		else rm.fail("rmdir failed", child);
 	}
@@ -367,10 +378,10 @@ void fdWalkContents(Remover& rm, int dirfd, const std::string& path, int depth, 
 }
 
 // `real` is a plain (non-device) path, `below` the number of its trailing components that lie under the trusted root.
-RemoveResult fdRemove(const std::string& real, size_t below, void (*hook)(const std::string&)) {
+RemoveResult fdRemove(const std::string& real, size_t below, void (*hook)(const std::string&), const std::function<bool()>& stop) {
 	RemoveResult res;
 	const Fs realFs{FileOps{}};
-	Remover rm{realFs, res};
+	Remover rm{realFs, res, &stop};
 	std::vector<std::string> raw, comps;
 	pathroot::splitInto(real, raw);
 	for (const std::string& c : raw)
@@ -422,19 +433,20 @@ RemoveResult fdRemove(const std::string& real, size_t below, void (*hook)(const 
 			rm.fail("cannot open", full);
 		} else {
 			fdWalkContents(rm, top, full, 0, hook);
-			if (::unlinkat(fd, name.c_str(), AT_REMOVEDIR) == 0) res.dirs++;
+			if (res.stopped) { /* partly deleted: the top directory stays */ }
+			else if (::unlinkat(fd, name.c_str(), AT_REMOVEDIR) == 0) res.dirs++;
 			else rm.fail("rmdir failed", full);
 		}
 	}
 	::close(fd);
-	res.ok = res.errors == 0;
+	res.ok = res.errors == 0 && !res.stopped;
 	return res;
 }
 #endif
 } // namespace
 
 RemoveResult removeTree(const std::string& path, const std::string& mustBeUnder, const std::vector<std::string>& roots,
-                        const FileOps& ops) {
+                        const FileOps& ops, const std::function<bool()>& stop) {
 	if (path.empty()) return refuse("empty path");
 	if (mustBeUnder.empty()) return refuse("empty mustBeUnder");
 	if (roots.empty()) return refuse("no roots given");
@@ -490,7 +502,7 @@ RemoveResult removeTree(const std::string& path, const std::string& mustBeUnder,
 	RemoveResult res;
 #ifndef __wii__
 	if (pp.device.empty() && !ops.stat && !ops.list && !ops.remove && !ops.rmdir) {
-		res = fdRemove(real, pp.comps.size() - n, ops.walkHook);
+		res = fdRemove(real, pp.comps.size() - n, ops.walkHook, stop);
 		return res;
 	}
 #endif
@@ -503,8 +515,8 @@ RemoveResult removeTree(const std::string& path, const std::string& mustBeUnder,
 	}
 	if (!st.exists) { res.ok = true; return res; }
 	res.existed = true;
-	Remover{fs, res}.walk(real, 0);
-	res.ok = res.errors == 0;
+	Remover{fs, res, &stop}.walk(real, 0);
+	res.ok = res.errors == 0 && !res.stopped;
 	return res;
 }
 

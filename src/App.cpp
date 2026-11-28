@@ -17,6 +17,7 @@
 #include "net/HttpWii.h"
 #include "platform/Platform.h"
 #ifdef OPENSHOP_DEBUGTOOLS
+#include "platform/ClaimProbe.h"
 #include "platform/CommitProbe.h"
 #endif
 #include "ui/Widgets.h"
@@ -72,14 +73,7 @@ bool App::init(int argc, char** argv) {
 			ov = install::parseDeviceId(opts.appsDevice);
 			if (!ov) LOG("Apps device: dev option appsdevice=%s is not sd or usb, ignored", opts.appsDevice.c_str());
 		}
-		appsDevice_.setBusy([] {
-			static bool logged = false;
-			if (!logged) {
-				logged = true;
-				LOG("busy guard: no job system yet (Increment 7 plugs in Jobs::busy())");
-			}
-			return false;
-		});
+		appsDevice_.setBusy([this] { return jobs_.busy(); }); // any queued or running job but Cleanup (Increment 7)
 		appsDevice_.init(platform::dataDir() + "/appsdevice.ini", m, ov);
 		if (opts.appsDeviceSwap)
 			LOG("Apps device: appsdeviceswap=1 requested; it acts after the first scan (Increment 11), so nothing happens yet");
@@ -93,9 +87,37 @@ bool App::init(int argc, char** argv) {
 		std::vector<install::RecoveryRoot> mounted;
 		for (const auto& r : platform::storageRoots())
 			if (r.mounted) mounted.push_back({r.id, r.root});
-		for (const install::RootRecovery& rr : install::recover(mounted))
+		std::vector<install::RootRecovery> recovered = install::recover(mounted);
+		for (const install::RootRecovery& rr : recovered)
 			if (rr.outcome != install::RecoveryOutcome::Nothing)
 				LOG("Recovery on %s: %s%s", rr.id.c_str(), install::describe(rr.outcome), rr.detail.empty() ? "" : (" (" + rr.detail + ")").c_str());
+
+		// The job system (Increment 7): the install worker thread, then the first real job, Cleanup, per mounted root. Staging
+		// cleanup is NOT done at start-up on the main thread (user decision 2026-11-27); it runs here on the worker. A root whose
+		// recovery was LeftAlone or Failed keeps its journal and the parked old app behind it, so it gets no Cleanup job (and
+		// cleanStaging's own guard would refuse it anyway).
+		install::Jobs::Config jc;
+		for (const auto& r : platform::storageRoots()) jc.removeRoots.push_back(r.root);
+		jc.measureStack = opts.perf;
+		jc.logProgress = opts.devJobs > 0 || opts.perf;
+		if (!jobs_.start(jc)) {
+			LOG("Jobs: the install worker could not be started; installs will fail");
+		} else {
+			for (size_t i = 0; i < mounted.size(); i++) {
+				const install::RecoveryOutcome o = recovered[i].outcome;
+				if (o == install::RecoveryOutcome::LeftAlone || o == install::RecoveryOutcome::Failed) {
+					LOG("Cleanup: not queued for %s (recovery: %s)", mounted[i].id.c_str(), install::describe(o));
+					continue;
+				}
+				jobs_.queueCleanup(mounted[i].root, mounted[i].id);
+			}
+			if (opts.devJobs > 0) {
+				const uint32_t ms = opts.devJobMs >= 0 ? (uint32_t)opts.devJobMs : 3000u;
+				LOG("Dev jobs: queueing %d Sleep job(s) of %u ms%s%s", opts.devJobs, ms, opts.devJobFail ? ", the last one fails" : "",
+				    opts.devJobCommit ? ", second half counts as the commit phase" : "");
+				jobs_.queueDevSleeps(opts.devJobs, ms, opts.devJobFail, opts.devJobCommit, appsRoot());
+			}
+		}
 	}
 	switch (opts.probeChoice()) { // one probe per launch
 		case DevOptions::ProbeChoice::Heap: platform::heapProbe(); break;
@@ -108,8 +130,15 @@ bool App::init(int argc, char** argv) {
 			    opts.commitProbe.c_str());
 #endif
 			break;
+		case DevOptions::ProbeChoice::Claim:
+#ifdef OPENSHOP_DEBUGTOOLS
+			platform::claimProbe(jobs_); // queues three jobs and returns: the probe runs on the install worker, the UI keeps drawing
+#else
+			LOG("probe: claimprobe=1 was requested, but the claim probe only exists in DEBUGTOOLS builds (./dev run --claimprobe builds one)");
+#endif
+			break;
 		case DevOptions::ProbeChoice::Conflict:
-			LOG("probe: more than one of heapprobe, stackprobe and commitprobe was requested; they disturb each other, so NONE runs. Ask for one.");
+			LOG("probe: more than one of heapprobe, stackprobe, commitprobe and claimprobe was requested; they disturb each other, so NONE runs. Ask for one.");
 			break;
 		case DevOptions::ProbeChoice::None: break;
 	}
@@ -150,6 +179,12 @@ void App::openDevStartScreen() {
 }
 
 void App::shutdown() {
+	// Ask both workers to stop first (queued install jobs dropped, the running one cancelled unless it is committing; every net
+	// transfer cancelled), so their waits overlap; then join the install worker (bounded: 1.5 s, or 30 s while it is committing) and
+	// the net worker (its own 1 s budget). Increment 16 moves these waits out of here into the pending-quit state.
+	jobs_.beginShutdown();
+	worker_.cancelAll();
+	jobs_.shutdown();
 	// First, while the SDL timer and threads still exist: cancels and joins any in-flight transfer.
 	uint32_t stopT0 = SDL_GetTicks();
 	worker_.stop();
@@ -357,6 +392,7 @@ void App::run() {
 		platform::poll(in, dt, gfx.width());
 		if (in.quit) break;
 		worker_.drainResults();
+		jobs_.update(); // applies what the install worker reported, starts the next job, rebuilds the snapshot
 		if (opts.autoRefreshMs >= 0) autoRefreshTick();
 #ifdef OPENSHOP_DEBUGTOOLS
 		debuglog::pump();

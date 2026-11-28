@@ -5,11 +5,11 @@
 //
 // Sources, highest priority first:
 //   1. Environment (PC build, set by `./dev`): OPENSHOP_START, OPENSHOP_MOCK, OPENSHOP_OFFLINE,
-//      OPENSHOP_REFRESH, OPENSHOP_FAIL, OPENSHOP_TOPBAR, OPENSHOP_MOCKDELAY, OPENSHOP_RATELIMIT, OPENSHOP_CACHETTL, OPENSHOP_API, OPENSHOP_ICONS, OPENSHOP_AUTOREFRESH, OPENSHOP_PERF, OPENSHOP_HEAPPROBE, OPENSHOP_STACKPROBE, OPENSHOP_COMMITPROBE, OPENSHOP_COMMITPROBE_FILES, OPENSHOP_COMMITPROBE_STACK, OPENSHOP_NETTEST, OPENSHOP_NETTESTBG, OPENSHOP_NETTESTQUIT, OPENSHOP_APPS_DEVICE, OPENSHOP_APPS_DEVICE_SWAP. An empty variable is ignored. On/off flags
+//      OPENSHOP_REFRESH, OPENSHOP_FAIL, OPENSHOP_TOPBAR, OPENSHOP_MOCKDELAY, OPENSHOP_RATELIMIT, OPENSHOP_CACHETTL, OPENSHOP_API, OPENSHOP_ICONS, OPENSHOP_AUTOREFRESH, OPENSHOP_PERF, OPENSHOP_HEAPPROBE, OPENSHOP_STACKPROBE, OPENSHOP_COMMITPROBE, OPENSHOP_COMMITPROBE_FILES, OPENSHOP_COMMITPROBE_STACK, OPENSHOP_CLAIMPROBE, OPENSHOP_NETTEST, OPENSHOP_NETTESTBG, OPENSHOP_NETTESTQUIT, OPENSHOP_APPS_DEVICE, OPENSHOP_APPS_DEVICE_SWAP, OPENSHOP_DEVJOBS, OPENSHOP_DEVJOBMS, OPENSHOP_DEVJOBFAIL, OPENSHOP_DEVJOBCOMMIT. An empty variable is ignored. On/off flags
 //      (mock, offline, refresh) are on unless the value is "0", "false", "no" or "off"; fail, topbar, mockdelay
 //      and ratelimit take the values described next to their fields.
 //   2. <dataDir>/devstart (Wii, written by `./dev`; env vars don't reach Dolphin): one key=value
-//      per line with keys screen, mock, offline, refresh, fail, topbar, mockdelay, ratelimit, cachettl, api, icons, autorefresh, perf, heapprobe, stackprobe, commitprobe, commitprobe_files, commitprobe_stack, nettest, nettestbg, nettestquit, appsdevice, appsdeviceswap. A line without '=' is a bare screen name
+//      per line with keys screen, mock, offline, refresh, fail, topbar, mockdelay, ratelimit, cachettl, api, icons, autorefresh, perf, heapprobe, stackprobe, commitprobe, commitprobe_files, commitprobe_stack, claimprobe, nettest, nettestbg, nettestquit, appsdevice, appsdeviceswap, devjobs, devjobms, devjobfail, devjobcommit. A line without '=' is a bare screen name
 //      (the old one-line format).
 struct DevOptions {
 	std::string screen; // "" = normal start
@@ -72,13 +72,24 @@ struct DevOptions {
 	// commitprobe_stack=<KB>: the worker's stack size, default 64 (the plan's proposal for the install worker). -1 = default.
 	int commitProbeStackKb = -1;
 
+	// claimprobe=1 (DEBUGTOOLS builds only, platform::claimProbe; a release logs that it is not built in; M3 Increment 7): queues three
+	// real jobs on the install worker (the main thread never waits) that show the staging claim at work on the SD card: a job holds a
+	// claim on one staging dir while the Cleanup routine runs, the claimed dir must survive and an abandoned one must go; a normal
+	// Cleanup job then removes the released dir; the probe removes anything left. Refuses when a journal exists on the SD card or
+	// staging holds dirs it did not create. Logs "claimprobe:" lines, ending in RESULT PASS or FAIL and "cleaned".
+	bool claimProbe = false;
+
 	// One probe per launch: they disturb each other's numbers (and the heap probe fills the whole heap), so asking for more
 	// than one runs NONE and App logs why.
-	enum class ProbeChoice { None, Heap, Stack, Commit, Conflict };
+	enum class ProbeChoice { None, Heap, Stack, Commit, Claim, Conflict };
 	ProbeChoice probeChoice() const {
-		const int n = (heapProbe ? 1 : 0) + (stackProbe ? 1 : 0) + (commitProbe.empty() ? 0 : 1);
+		const int n = (heapProbe ? 1 : 0) + (stackProbe ? 1 : 0) + (commitProbe.empty() ? 0 : 1) + (claimProbe ? 1 : 0);
 		if (n > 1) return ProbeChoice::Conflict;
-		return heapProbe ? ProbeChoice::Heap : stackProbe ? ProbeChoice::Stack : !commitProbe.empty() ? ProbeChoice::Commit : ProbeChoice::None;
+		return heapProbe    ? ProbeChoice::Heap
+		       : stackProbe ? ProbeChoice::Stack
+		       : !commitProbe.empty() ? ProbeChoice::Commit
+		       : claimProbe ? ProbeChoice::Claim
+		                    : ProbeChoice::None;
 	}
 
 	// nettest=<script>, nettestbg=<url>, nettestquit=1: the Increment 7 network self-test (net/NetSelfTest.h). Off (empty)
@@ -93,6 +104,16 @@ struct DevOptions {
 	// appsdeviceswap=1: once the first scan is done (Increment 11), switch to the other device once, to test switching
 	// before M4's Settings row exists. Parsed now; does nothing until Increment 11 (App logs that it was requested).
 	bool appsDeviceSwap = false;
+
+	// devjobs=<n>: once the job system is up, queue n dev Sleep jobs (Increment 7; n is capped at kMaxDevJobs = 100), each devjobms long (default 3000). They run strictly
+	// one after the other on the install worker; their progress is logged from the main thread's snapshot. devjobfail=1 makes the LAST
+	// one fail; devjobcommit=1 makes the second half of each count as the commit phase (it cannot be cancelled and quitting waits for it).
+	// They make "Show apps on" switching refuse (the busy guard) while they run. 0 = off.
+	static constexpr int kMaxDevJobs = 100;
+	int devJobs = 0;
+	int devJobMs = -1; // -1 = 3000
+	bool devJobFail = false;
+	bool devJobCommit = false;
 
 	static DevOptions load(const std::string& dataDir);
 	// Parses the devstart file text into `o`. Exposed separately so it can be tested without files.

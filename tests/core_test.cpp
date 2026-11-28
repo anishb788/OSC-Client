@@ -316,6 +316,18 @@ static void testProbeExclusive() {
 	o = DevOptions::load("/nonexistent-openshop-dir");
 	CHECK(o.commitProbe == "flush" && o.commitProbeFiles == 123 && o.probeChoice() == PC::Commit);
 	for (const char* n : {"OPENSHOP_COMMITPROBE", "OPENSHOP_COMMITPROBE_FILES", "OPENSHOP_COMMITPROBE_STACK"}) unsetenv(n);
+	// the claim probe (M3 Increment 7): a key and an environment variable, exclusive with the other probes, silent when off
+	CHECK(parse("claimprobe=1\n").probeChoice() == PC::Claim && parse("claimprobe=1\n").active() == "claimprobe=1");
+	CHECK(parse("claimprobe=0\n").probeChoice() == PC::None && parse("").active().find("claimprobe") == std::string::npos);
+	CHECK(parse("claimprobe=1\nheapprobe=1\n").probeChoice() == PC::Conflict);
+	CHECK(parse("claimprobe=1\nstackprobe=1\n").probeChoice() == PC::Conflict);
+	CHECK(parse("claimprobe=1\ncommitprobe=cap\n").probeChoice() == PC::Conflict);
+	CHECK(parse("claimprobe=1\n").describe().find("claimprobe=1") != std::string::npos);
+	setenv("OPENSHOP_CLAIMPROBE", "1", 1);
+	CHECK(DevOptions::load("/nonexistent-openshop-dir").probeChoice() == PC::Claim);
+	setenv("OPENSHOP_CLAIMPROBE", "0", 1);
+	CHECK(DevOptions::load("/nonexistent-openshop-dir").probeChoice() == PC::None);
+	unsetenv("OPENSHOP_CLAIMPROBE");
 }
 
 static void testRootOf() {

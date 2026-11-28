@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -112,6 +113,7 @@ struct RemoveResult {
 	size_t files = 0;      // files and symlinks removed
 	size_t dirs = 0;       // directories removed (including `path`)
 	size_t errors = 0;     // entries that could not be removed
+	bool stopped = false;  // the `stop` poll answered true: the walk ended early, ok is false and the tree is partly gone
 	std::string error;     // the first problem (why it was refused, or the first failing path and step)
 };
 
@@ -149,8 +151,13 @@ struct RemoveResult {
 // unlinked, never entered. A symlinked directory below the root is therefore an error, not a detour. With injected
 // FileOps (tests of the failure paths), and on the Wii (no symlinks; libfat has no *at calls), the walk is by path with
 // lstat semantics.
+//
+// `stop` (optional, M3 Increment 7: a cancelled Cleanup job) is polled before every directory entry that is about to be removed,
+// on every level. When it answers true the walk ends there: RemoveResult::stopped is set, ok is false, errors does not count it,
+// and the tree is left partly deleted (the directories on the way down are NOT removed, so what remains is an ordinary, smaller
+// tree). That state is safe to retry: removeTree on the same path later finishes the job.
 RemoveResult removeTree(const std::string& path, const std::string& mustBeUnder, const std::vector<std::string>& roots,
-                        const FileOps& ops = {});
+                        const FileOps& ops = {}, const std::function<bool()>& stop = nullptr);
 
 // ---- commitDir -------------------------------------------------------------------------------------------------------
 

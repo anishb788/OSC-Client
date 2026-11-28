@@ -32,14 +32,19 @@
 #                                                 flush: writes three marker files under sd:/apps/OpenShop/probe/ (fsynced, plain, fsynced rename), waits 90 s for a host-side SD snapshot, removes them. One probe per launch
 #     --commitprobe-files <n>                     size of the cap probe: n restore ops and ~2n manifest paths (default 5000; 19000 is just under both plan caps; 3n files are created, so big n is slow on libfat)
 #     --commitprobe-stack <kb>                    the probe worker's stack size in KB (default 64)
+#     --claimprobe                                dev-only (builds the DEBUGTOOLS variant by itself), once at startup: queues three real jobs (the UI keeps drawing) that hold a staging claim while the Cleanup routine runs on the SD card; logs "claimprobe:" lines ending in RESULT PASS or FAIL and "cleaned"; exclusive with the other probes
 #     --appsdevice sd|usb                         force the "Show apps on" device for this session if it is mounted (never saved; falls back like a saved choice)
 #     --appsdeviceswap                            switch to the other device once after the first scan (does nothing until M3 Increment 11)
+#     --devjobs <n>                               queue n (at most 100) dev Sleep jobs at startup (M3 Increment 7): they run one after the other on the install worker, progress is logged from the main thread; "Show apps on" switching is refused while they run
+#     --devjobms <ms>                             how long each dev job takes (default 3000)
+#     --devjobfail                                the last dev job fails
+#     --devjobcommit                              the second half of each dev job counts as the commit phase (cannot be cancelled; quitting waits for it)
 #     --nettest <script>                          dev-only network self-test: GET URLs through the worker and log the results
 #     --nettestbg <url>                           ... plus a Background download alongside (shorthand for bg:<url> first)
 #     --nettestquit                               quit by itself when the script ends (a bg job still running tests stop())
 #                                                 Script syntax: src/net/NetSelfTest.h. The UI is untouched. Off by default.
 #   On Wii they are written to <app dir>/devstart as key=value lines (env vars don't reach
-#   Dolphin); on PC they are exported as OPENSHOP_START / _MOCK / _OFFLINE / _REFRESH / _FAIL / _TOPBAR / _MOCKDELAY / _RATELIMIT / _CACHETTL / _API / _ICONS / _AUTOREFRESH / _PERF / _HEAPPROBE / _STACKPROBE / _COMMITPROBE / _COMMITPROBE_FILES / _COMMITPROBE_STACK / _NETTEST / _NETTESTBG / _NETTESTQUIT / _APPS_DEVICE / _APPS_DEVICE_SWAP.
+#   Dolphin); on PC they are exported as OPENSHOP_START / _MOCK / _OFFLINE / _REFRESH / _FAIL / _TOPBAR / _MOCKDELAY / _RATELIMIT / _CACHETTL / _API / _ICONS / _AUTOREFRESH / _PERF / _HEAPPROBE / _STACKPROBE / _COMMITPROBE / _COMMITPROBE_FILES / _COMMITPROBE_STACK / _CLAIMPROBE / _NETTEST / _NETTESTBG / _NETTESTQUIT / _APPS_DEVICE / _APPS_DEVICE_SWAP.
 #   Dolphin's virtual SD card is synced with ./sdcard (put bgm.mp3 in sdcard/apps/OpenShop/).
 #   ./sdcard is a symlink to .dolphin/sdcard; .dolphin/ is the only repo dir Dolphin may write to.
 #   ./dev package             clean release build (never DEBUGTOOLS) into dist/OpenShop.zip for the Homebrew Channel (SD:/apps/OpenShop)
@@ -105,14 +110,14 @@ dkp() {
 # when DEBUGTOOLS changes, so the next plain ./dev run builds the normal variant again.
 probe_make_args() {
 	PROBE_ARGS=()
-	if [[ -n "$OPT_COMMITPROBE" ]]; then
+	if [[ -n "$OPT_COMMITPROBE" ]] || (( OPT_CLAIMPROBE )); then
 		case " $* " in *" DEBUGTOOLS="*) ;; *) PROBE_ARGS=(DEBUGTOOLS=1) ;; esac
 	fi
 }
 
 build() {
 	probe_make_args "$@"
-	[[ ${#PROBE_ARGS[@]} -eq 0 ]] || info "--commitprobe: building the DEBUGTOOLS variant"
+	[[ ${#PROBE_ARGS[@]} -eq 0 ]] || info "--commitprobe / --claimprobe: building the DEBUGTOOLS variant"
 	info "Building $TARGET"
 	if dkp make -j"$(nproc)" ${PROBE_ARGS[@]+"${PROBE_ARGS[@]}"} "$@"; then
 		ok "Built $TARGET.dol"
@@ -254,11 +259,16 @@ devstart_text() {
 	[[ -n "$OPT_COMMITPROBE" ]] && echo "commitprobe=$OPT_COMMITPROBE"
 	[[ -n "$OPT_COMMITPROBE_FILES" ]] && echo "commitprobe_files=$OPT_COMMITPROBE_FILES"
 	[[ -n "$OPT_COMMITPROBE_STACK" ]] && echo "commitprobe_stack=$OPT_COMMITPROBE_STACK"
+	(( OPT_CLAIMPROBE )) && echo "claimprobe=1"
 	[[ -n "$OPT_NETTEST" ]] && echo "nettest=$OPT_NETTEST"
 	[[ -n "$OPT_NETTESTBG" ]] && echo "nettestbg=$OPT_NETTESTBG"
 	(( OPT_NETTESTQUIT )) && echo "nettestquit=1"
 	[[ -n "$OPT_APPSDEVICE" ]] && echo "appsdevice=$OPT_APPSDEVICE"
 	(( OPT_APPSDEVICESWAP )) && echo "appsdeviceswap=1"
+	[[ -n "$OPT_DEVJOBS" ]] && echo "devjobs=$OPT_DEVJOBS"
+	[[ -n "$OPT_DEVJOBMS" ]] && echo "devjobms=$OPT_DEVJOBMS"
+	(( OPT_DEVJOBFAIL )) && echo "devjobfail=1"
+	(( OPT_DEVJOBCOMMIT )) && echo "devjobcommit=1"
 	return 0
 }
 
@@ -326,9 +336,9 @@ launch_pc() {
 	OPENSHOP_DATA="$APP_DIR" OPENSHOP_START="$START_SCREEN" OPENSHOP_MOCK="$OPT_MOCK" \
 		OPENSHOP_OFFLINE="$OPT_OFFLINE" OPENSHOP_REFRESH="$OPT_REFRESH" OPENSHOP_FAIL="$OPT_FAIL" OPENSHOP_TOPBAR="$OPT_TOPBAR" \
 		OPENSHOP_MOCKDELAY="$OPT_MOCKDELAY" OPENSHOP_RATELIMIT="$OPT_RATELIMIT" OPENSHOP_CACHETTL="$OPT_CACHETTL" OPENSHOP_API="$OPT_API" OPENSHOP_ICONS="$OPT_ICONS" OPENSHOP_AUTOREFRESH="$OPT_AUTOREFRESH" OPENSHOP_PERF="$OPT_PERF" OPENSHOP_HEAPPROBE="$OPT_HEAPPROBE" OPENSHOP_STACKPROBE="$OPT_STACKPROBE" \
-		OPENSHOP_COMMITPROBE="$OPT_COMMITPROBE" OPENSHOP_COMMITPROBE_FILES="$OPT_COMMITPROBE_FILES" OPENSHOP_COMMITPROBE_STACK="$OPT_COMMITPROBE_STACK" \
+		OPENSHOP_COMMITPROBE="$OPT_COMMITPROBE" OPENSHOP_COMMITPROBE_FILES="$OPT_COMMITPROBE_FILES" OPENSHOP_COMMITPROBE_STACK="$OPT_COMMITPROBE_STACK" OPENSHOP_CLAIMPROBE="$OPT_CLAIMPROBE" \
 		OPENSHOP_NETTEST="$OPT_NETTEST" OPENSHOP_NETTESTBG="$OPT_NETTESTBG" OPENSHOP_NETTESTQUIT="$OPT_NETTESTQUIT" \
-		OPENSHOP_APPS_DEVICE="$OPT_APPSDEVICE" OPENSHOP_APPS_DEVICE_SWAP="$OPT_APPSDEVICESWAP" ./build-pc/openshop &
+		OPENSHOP_APPS_DEVICE="$OPT_APPSDEVICE" OPENSHOP_APPS_DEVICE_SWAP="$OPT_APPSDEVICESWAP" OPENSHOP_DEVJOBS="$OPT_DEVJOBS" OPENSHOP_DEVJOBMS="$OPT_DEVJOBMS" OPENSHOP_DEVJOBFAIL="$OPT_DEVJOBFAIL" OPENSHOP_DEVJOBCOMMIT="$OPT_DEVJOBCOMMIT" ./build-pc/openshop &
 	echo $! > build-pc/.pid
 }
 
@@ -397,7 +407,7 @@ headers() {
 usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; }
 
 cmd="${1:-}"; shift || true
-START_SCREEN=""; OPT_MOCK=0; OPT_OFFLINE=0; OPT_REFRESH=0; OPT_FAIL=""; OPT_TOPBAR=""; OPT_MOCKDELAY=""; OPT_RATELIMIT=""; OPT_CACHETTL=""; OPT_API=""; OPT_ICONS=""; OPT_AUTOREFRESH=""; OPT_PERF=0; OPT_HEAPPROBE=0; OPT_STACKPROBE=0; OPT_COMMITPROBE=""; OPT_COMMITPROBE_FILES=""; OPT_COMMITPROBE_STACK=""; OPT_NETTEST=""; OPT_NETTESTBG=""; OPT_NETTESTQUIT=0; OPT_APPSDEVICE=""; OPT_APPSDEVICESWAP=0
+START_SCREEN=""; OPT_MOCK=0; OPT_OFFLINE=0; OPT_REFRESH=0; OPT_FAIL=""; OPT_TOPBAR=""; OPT_MOCKDELAY=""; OPT_RATELIMIT=""; OPT_CACHETTL=""; OPT_API=""; OPT_ICONS=""; OPT_AUTOREFRESH=""; OPT_PERF=0; OPT_HEAPPROBE=0; OPT_STACKPROBE=0; OPT_COMMITPROBE=""; OPT_COMMITPROBE_FILES=""; OPT_COMMITPROBE_STACK=""; OPT_CLAIMPROBE=0; OPT_NETTEST=""; OPT_NETTESTBG=""; OPT_NETTESTQUIT=0; OPT_APPSDEVICE=""; OPT_APPSDEVICESWAP=0; OPT_DEVJOBS=""; OPT_DEVJOBMS=""; OPT_DEVJOBFAIL=0; OPT_DEVJOBCOMMIT=0
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 		--screen)
@@ -420,7 +430,17 @@ while [[ $# -gt 0 ]]; do
 			if [[ "$1" == --commitprobe-files ]]; then OPT_COMMITPROBE_FILES="$2"; else OPT_COMMITPROBE_STACK="$2"; fi
 			shift 2 ;;
 		--nettestquit) OPT_NETTESTQUIT=1; shift ;;
+		--claimprobe) OPT_CLAIMPROBE=1; shift ;;
 		--appsdeviceswap) OPT_APPSDEVICESWAP=1; shift ;;
+		--devjobfail) OPT_DEVJOBFAIL=1; shift ;;
+		--devjobcommit) OPT_DEVJOBCOMMIT=1; shift ;;
+		--devjobs|--devjobms)
+			[[ "${2:-}" =~ ^[0-9]{1,6}$ ]] || { err "$1: needs a number"; exit 1; }
+			if [[ "$1" == --devjobs ]]; then
+				(( 10#$2 <= 100 )) || { err "--devjobs: at most 100"; exit 1; }
+				OPT_DEVJOBS="$((10#$2))"
+			else OPT_DEVJOBMS="$2"; fi
+			shift 2 ;;
 		--appsdevice)
 			case "${2:-}" in sd|usb) OPT_APPSDEVICE="$2"; shift 2 ;; *) err "--appsdevice: needs sd or usb"; exit 1 ;; esac ;;
 		--appsdevice=*)

@@ -22,26 +22,72 @@ const char* describe(RecoveryOutcome o) {
 	return "?";
 }
 
-bool cleanStaging(const std::string& root, const std::vector<std::string>& removeRoots, const FileOps& ops) {
+bool cleanStaging(const std::string& root, const std::vector<std::string>& removeRoots, const CleanGuard& guard, const FileOps& ops,
+                  CleanStats* stats) {
+	CleanStats local;
+	CleanStats& st = stats ? *stats : local;
+	st = CleanStats{};
 	const std::string base = stagingBase(root);
 	const Presence bp = presenceOf(base, ops);
 	if (bp == Presence::Absent) return true; // cleanly not there: nothing to remove
 	if (bp == Presence::Error) {
-		LOG("recovery: cannot check %s; staging not cleaned", base.c_str());
+		LOG("cleanup: cannot check %s; staging not cleaned", base.c_str());
 		return false;
+	}
+	// The journal first: which dir does it name? Only a CLEAN "no journal" lets every other dir go.
+	int64_t journalJob = -1;
+	const JournalLoad jl = loadJournal(root, guard.device, ops);
+	if (jl.status == LoadStatus::Corrupt) {
+		st.journalUnclear = true;
+		LOG("cleanup[%s]: the journal is unusable (%s); not touching any staging folder", guard.device.c_str(), jl.error.c_str());
+		return false;
+	}
+	if (jl.status == LoadStatus::Missing) {
+		const std::string jp = journalPath(root);
+		if (presenceOf(jp, ops) != Presence::Absent || presenceOf(jp + ".bak", ops) != Presence::Absent) {
+			st.journalUnclear = true;
+			LOG("cleanup[%s]: cannot tell whether there is a journal; not touching any staging folder", guard.device.c_str());
+			return false;
+		}
+	} else {
+		journalJob = jl.journal.jobId;
 	}
 	std::vector<std::string> names;
 	if (!listDir(base, names, ops)) {
-		LOG("recovery: cannot list %s; staging not cleaned", base.c_str());
+		LOG("cleanup: cannot list %s; staging not cleaned", base.c_str());
 		return false;
 	}
 	std::sort(names.begin(), names.end());
 	bool all = true;
 	for (const std::string& n : names) {
-		const RemoveResult r = removeTree(base + "/" + n, base, removeRoots, ops);
+		if (guard.stop && guard.stop()) {
+			st.stopped = true;
+			return false;
+		}
+		// A job id is plain decimal digits; anything else cannot be named by a journal or by a live job.
+		int64_t id = -1;
+		if (!n.empty() && n.size() <= 18 && n.find_first_not_of("0123456789") == std::string::npos) id = std::stoll(n);
+		if (id >= 0 && id == journalJob) {
+			st.skippedJournal++;
+			LOG("cleanup[%s]: staging/%s is named by the journal; left alone", guard.device.c_str(), n.c_str());
+			continue;
+		}
+		if (id >= 0 && std::find(guard.activeJobIds.begin(), guard.activeJobIds.end(), id) != guard.activeJobIds.end()) {
+			st.skippedActive++;
+			continue;
+		}
+		// The stop poll also reaches into the dir: a cancelled Cleanup leaves it partly deleted, which the next run finishes.
+		const RemoveResult r = removeTree(base + "/" + n, base, removeRoots, ops, guard.stop);
+		if (r.stopped) {
+			st.stopped = true;
+			return false;
+		}
 		if (!r.ok) {
-			LOG("recovery: could not remove staging/%s: %s", n.c_str(), r.error.c_str());
+			LOG("cleanup: could not remove staging/%s: %s", n.c_str(), r.error.c_str());
+			st.failed++;
 			all = false;
+		} else {
+			st.removed++;
 		}
 	}
 	return all;

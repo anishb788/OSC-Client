@@ -228,6 +228,47 @@ static void testRemoveDepthAndFaults() {
 	CHECK(!r.ok && r.errors >= 3 && there(t.sub("keep/f")));
 }
 
+// The optional stop poll (Increment 7: a cancelled Cleanup job): polled per entry on every level, ends the walk with `stopped`,
+// leaves a smaller ordinary tree (no directory on the way is removed) and the same call finishes it later. Both walks (the fd walk
+// and the path walk that injected ops select).
+static void testRemoveStop() {
+	for (int walk = 0; walk < 2; walk++) {
+		TempDir t;
+		const std::vector<std::string> roots = {t.path};
+		FileOps ops; // walk 1: an injected rmdir selects the path walk (real behaviour)
+		if (walk == 1) ops.rmdir = [](const char* p) { return ::rmdir(p); };
+		auto build = [&] {
+			for (const char* d : {"a", "b", "c"})
+				for (const char* f : {"1", "2", "3"}) touch(t.sub(std::string("apps/s/") + d + "/" + f));
+			touch(t.sub("apps/s/z"));
+			touch(t.sub("apps/keep/f"));
+		};
+		build();
+		// never stops: same as no poll
+		int polls = 0;
+		RemoveResult r = removeTree(t.sub("apps/s"), t.sub("apps"), roots, ops, [&] { polls++; return false; });
+		CHECK(r.ok && !r.stopped && !there(t.sub("apps/s")) && polls == 13); // every entry is polled: a, b, c, z and the nine files
+		build();
+		// stops before the first entry
+		r = removeTree(t.sub("apps/s"), t.sub("apps"), roots, ops, [] { return true; });
+		CHECK(!r.ok && r.stopped && !r.refused && r.errors == 0 && r.files == 0 && r.dirs == 0);
+		CHECK(there(t.sub("apps/s/a/1")) && there(t.sub("apps/s/z")) && there(t.sub("apps/keep/f")));
+		// stops inside the second directory (polls: a, a/1, a/2, a/3, b, b/1): a is gone, b and the top directory stay, nothing else
+		int n = 0;
+		r = removeTree(t.sub("apps/s"), t.sub("apps"), roots, ops, [&] { return ++n > 5; });
+		CHECK(!r.ok && r.stopped && r.errors == 0 && r.files == 3 && r.dirs == 1);
+		CHECK(there(t.sub("apps/s")) && !there(t.sub("apps/s/a")) && there(t.sub("apps/s/b/1")) && there(t.sub("apps/s/c/1")));
+		CHECK(there(t.sub("apps/keep/f")));
+		// retry without the poll finishes the job
+		r = removeTree(t.sub("apps/s"), t.sub("apps"), roots, ops);
+		CHECK(r.ok && !r.stopped && !there(t.sub("apps/s")) && there(t.sub("apps/keep/f")));
+		// a stop poll on a missing path: ok, never polled
+		bool polled = false;
+		r = removeTree(t.sub("apps/s"), t.sub("apps"), roots, ops, [&] { polled = true; return true; });
+		CHECK(r.ok && !r.stopped && !polled);
+	}
+}
+
 // ---- new in the review round ----------------------------------------------------------------------------------------
 static std::string gSwapDir, gSwapEntry, gSwapLink;
 static int gHookCalls = 0;
@@ -580,6 +621,7 @@ int main() {
 	testRemoveWorks();
 	testRemoveSymlinks();
 	testRemoveDepthAndFaults();
+	testRemoveStop();
 	testFdWalkRace();
 	testDeviceNormalisation();
 	testFatAliases();

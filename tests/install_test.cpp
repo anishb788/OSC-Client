@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Host tests for the pure install modules. Build and run: make -f Makefile.pc test
 // Increment 1: the vendored MD5 and the libzip link.
+#include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <filesystem>
 #include <sys/wait.h>
@@ -24,7 +26,11 @@
 #include "install/JobQueue.h"
 #include "install/Journal.h"
 #include "install/Manifest.h"
+#include "install/Md5Sink.h"
+#include "install/Messages.h"
 #include "install/MetaXml.h"
+#include "install/Preflight.h"
+#include "net/NetState.h"
 #include "install/RecordIo.h"
 #include "install/Rules.h"
 #include "install/Version.h"
@@ -2107,6 +2113,277 @@ static void testDevJobOptions() {
 	unsetenv("OPENSHOP_DEVJOBS");
 }
 
+// ---- Increment 8: Preflight, Md5Sink, Messages, NetState, the install= dev option ----
+
+static JobSpec mameSpec() {
+	JobSpec s;
+	s.slug = "mame4wii";
+	s.name = "MAME4Wii";
+	s.url = "http://hbb1.oscwii.org/api/contents/mame4wii/mame4wii.zip";
+	s.md5 = "e996304d3eb08046ff9aeb76996fa93a";
+	s.archiveSize = 78687769;
+	s.uncompressedSize = 1798841;
+	s.packageType = static_cast<uint8_t>(PackageType::Dol);
+	s.dirs = {"/mame", "/mame/roms", "/apps/mame4wii"};
+	s.targetRoot = "sd:";
+	s.device = "sd";
+	return s;
+}
+
+static void testPreflight() {
+	constexpr uint64_t kMb = 1024 * 1024;
+	// The formula, with mame4wii's real sizes: archive + max(unc, archive) = 2 x 78687769, plus 10% of that sum, plus 1 MB.
+	const uint64_t sum = 78687769ull * 2;
+	CHECK(spaceNeeded(78687769, 1798841) == sum + sum / 10 + kMb);
+	CHECK(spaceNeeded(78687769, 1798841) == 157375538ull + 15737553ull + 1048576ull);
+	// An archive smaller than its extracted size: archive + unc.
+	CHECK(spaceNeeded(1000, 5000) == 6000 + 600 + kMb);
+	CHECK(spaceNeeded(0, 0) == kMb);
+	CHECK(spaceNeeded(UINT64_MAX, UINT64_MAX) == UINT64_MAX && spaceNeeded(UINT64_MAX / 2 + 1, 0) == UINT64_MAX); // saturates, never wraps
+
+	const JobSpec s = mameSpec();
+	CHECK(refusalOf(s) == InstallRefusal::None);
+	const uint64_t need = spaceNeeded(s.archiveSize, s.uncompressedSize);
+	PreflightEnv env;
+	env.freeSpace = [&](const std::string& root) -> std::optional<uint64_t> { return root == "sd:" ? std::optional<uint64_t>(need) : std::nullopt; };
+	PreflightResult r = preflight(s, Device::Sd, env);
+	CHECK(r.ok() && r.needed == need && r.message.empty());
+	// One byte short -> NoSpace, with the amount in the text.
+	env.freeSpace = [&](const std::string&) -> std::optional<uint64_t> { return need - 1; };
+	r = preflight(s, Device::Sd, env);
+	CHECK(r.fail == PreflightFail::NoSpace && r.needed == need && r.have == need - 1);
+	CHECK(r.message == installErrorText(InstallError::NoSpace, Device::Sd, need, need - 1));
+	CHECK(r.message.find(megabytes(need)) != std::string::npos && r.message.find("SD card") != std::string::npos);
+	CHECK(megabytes(need) == "167 MB" && megabytes(1) == "1 MB" && megabytes(0) == "1 MB" && megabytes(kMb) == "1 MB" && megabytes(kMb + 1) == "2 MB");
+	// Needed rounds UP, free rounds DOWN (the text never promises more room than there is), under 1 MB is "less than 1 MB".
+	CHECK(installErrorText(InstallError::NoSpace, Device::Sd, 5 * kMb + kMb / 5, 5 * kMb + kMb / 10) ==
+	      "Not enough space on the SD card: about 6 MB is needed, 5 MB is free.");
+	CHECK(installErrorText(InstallError::NoSpace, Device::Sd, 5 * kMb, 0) ==
+	      "Not enough space on the SD card: about 5 MB is needed, less than 1 MB is free.");
+	CHECK(freeMegabytes(0) == "less than 1 MB" && freeMegabytes(kMb - 1) == "less than 1 MB" && freeMegabytes(kMb) == "1 MB" &&
+	      freeMegabytes(2 * kMb - 1) == "1 MB" && freeMegabytes(2 * kMb) == "2 MB");
+	r = preflight(s, Device::Usb, env);
+	CHECK(r.message.find("USB drive") != std::string::npos);
+	// Unknown passes at queue time, Down fails.
+	env.freeSpace = [&](const std::string&) -> std::optional<uint64_t> { return need + 5; };
+	env.net = net::NetState::Unknown;
+	CHECK(preflight(s, Device::Sd, env).ok());
+	env.net = net::NetState::Up;
+	CHECK(preflight(s, Device::Sd, env).ok());
+	env.net = net::NetState::Down;
+	r = preflight(s, Device::Sd, env);
+	CHECK(r.fail == PreflightFail::NetworkDown && r.message == installErrorText(InstallError::NetworkDown));
+	env.net = net::NetState::Unknown;
+	// A URL that is not an allowlisted OSC archive URL fails (the real allowlist), whatever else is fine.
+	JobSpec bad = s;
+	bad.url = "http://example.org/api/contents/mame4wii/mame4wii.zip";
+	r = preflight(bad, Device::Sd, env);
+	CHECK(!r.ok() && (r.fail == PreflightFail::Refused || r.fail == PreflightFail::UrlNotAllowed));
+	bad.url = "https://hbb1.oscwii.org/api/contents/mame4wii/mame4wii.zip"; // the https form is never allowed
+	CHECK(!preflight(bad, Device::Sd, env).ok());
+	// decide() on its own: a refusal that installRefusal() would not give but the URL rule still catches.
+	PreflightInput in;
+	in.refusal = InstallRefusal::None;
+	in.urlAllowed = false;
+	in.hasAppsDevice = true;
+	in.freeBytes = UINT64_MAX;
+	CHECK(decide(in).fail == PreflightFail::UrlNotAllowed);
+	in.urlAllowed = true;
+	CHECK(decide(in).ok());
+	// An apps device of None fails with exactly the plain text.
+	in.hasAppsDevice = false;
+	r = decide(in);
+	CHECK(r.fail == PreflightFail::NoAppsDevice && r.message == "No SD card or USB drive found.");
+	JobSpec none = s;
+	none.targetRoot.clear();
+	none.device = "none";
+	r = preflight(none, Device::None, env);
+	CHECK(r.fail == PreflightFail::NoAppsDevice && r.message == "No SD card or USB drive found.");
+	// Free space that cannot be read is a refusal, not "plenty".
+	in.hasAppsDevice = true;
+	in.freeBytes.reset();
+	CHECK(decide(in).fail == PreflightFail::DiskUnreadable);
+	// A refusal beats everything after it.
+	in.freeBytes = 0;
+	in.refusal = InstallRefusal::BadMd5;
+	r = decide(in);
+	CHECK(r.fail == PreflightFail::Refused && r.message == refusalText(InstallRefusal::BadMd5));
+	// A spec the catalog would refuse (no MD5) is refused from the copy too: "empty means refuse".
+	JobSpec nomd5 = s;
+	nomd5.md5.clear();
+	CHECK(refusalOf(nomd5) == InstallRefusal::BadMd5);
+	// Real fixture entries pass the spec round trip: every installable fixture app keeps passing refusalOf.
+	// NetState: Down expires by itself, Unknown and Up never do.
+	const uint32_t t0 = 1000;
+	CHECK(net::effectiveNetState(net::NetState::Down, t0, t0 + net::kDownTtlMs - 1) == net::NetState::Down);
+	CHECK(net::effectiveNetState(net::NetState::Down, t0, t0 + net::kDownTtlMs) == net::NetState::Unknown);
+	CHECK(net::effectiveNetState(net::NetState::Up, t0, t0 + 10 * net::kDownTtlMs) == net::NetState::Up);
+	CHECK(net::effectiveNetState(net::NetState::Down, 0xFFFFFFF0u, 0x00000010u) == net::NetState::Down); // across the clock wrap
+	net::setNetState(net::NetState::Down, 5000);
+	CHECK(net::netState(5000 + 100) == net::NetState::Down && net::netState(5000 + net::kDownTtlMs + 1) == net::NetState::Unknown);
+	net::setNetState(net::NetState::Unknown, 0);
+}
+
+// An inner sink that remembers what it got and can refuse after a number of bytes.
+struct CaptureSink : HttpSink {
+	std::string got;
+	bool started = false, finished = false, finishedOk = false;
+	size_t failAfter = SIZE_MAX; // refuses data once this many bytes are stored
+	bool refuseStart = false;
+	bool onStart(int, int64_t) override { started = true; return !refuseStart; }
+	bool onData(const uint8_t* d, size_t n) override {
+		if (got.size() + n > failAfter) return false;
+		got.append(reinterpret_cast<const char*>(d), n);
+		return true;
+	}
+	void onFinish(bool ok) override { finished = true; finishedOk = ok; }
+};
+
+static void testMd5Sink() {
+	std::string body(200003, 0);
+	for (size_t i = 0; i < body.size(); i++) body[i] = static_cast<char>(i * 167 + (i >> 8) * 13 + 5);
+	const std::string want = md5Of(body.data(), body.size());
+	// The chunked digest equals the one-shot digest, whatever the slicing.
+	for (size_t chunk : {size_t(1), size_t(63), size_t(64), size_t(4096), size_t(65536), body.size()}) {
+		auto cap = std::make_unique<CaptureSink>();
+		CaptureSink* c = cap.get();
+		Md5Sink m(std::move(cap), body.size());
+		CHECK(m.onStart(200, static_cast<int64_t>(body.size())));
+		bool ok = true;
+		for (size_t i = 0; i < body.size(); i += chunk) ok = ok && m.onData(reinterpret_cast<const uint8_t*>(body.data()) + i, std::min(chunk, body.size() - i));
+		CHECK(ok);
+		m.onFinish(true);
+		CHECK(m.digestHex() == want && m.bytes() == body.size() && m.finished());
+		CHECK(c->got == body && c->finished && c->finishedOk);
+	}
+	CHECK(md5Hex(reinterpret_cast<const unsigned char*>("0123456789abcdef")).size() == 32);
+	CHECK(sameHex("ABCDEF0123456789abcdef0123456789", "abcdef0123456789ABCDEF0123456789") && !sameHex("ab", "abc") && !sameHex("ab", "ac"));
+	{
+		// Content-Length that is not the catalog's size -> TooLarge, before anything is written; both directions.
+		for (int64_t cl : {int64_t(99), int64_t(101), int64_t(0)}) {
+			auto cap = std::make_unique<CaptureSink>();
+			CaptureSink* c = cap.get();
+			Md5Sink m(std::move(cap), 100);
+			CHECK(!m.onStart(200, cl) && m.failure() == HttpError::TooLarge && !c->started);
+		}
+		// An unknown length (chunked) passes the header rule.
+		Md5Sink m(std::make_unique<CaptureSink>(), 100);
+		CHECK(m.onStart(200, -1));
+	}
+	{
+		// Exactly the size is fine; one byte more is TooLarge and that byte is not written or hashed.
+		auto cap = std::make_unique<CaptureSink>();
+		CaptureSink* c = cap.get();
+		Md5Sink m(std::move(cap), 10);
+		const uint8_t d[11] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+		CHECK(m.onStart(200, 10) && m.onData(d, 10) && m.bytes() == 10);
+		CHECK(!m.onData(d + 10, 1) && m.failure() == HttpError::TooLarge && m.bytes() == 10 && c->got.size() == 10);
+		// Straddling the limit in one slice: refused whole.
+		Md5Sink m2(std::make_unique<CaptureSink>(), 10);
+		CHECK(m2.onStart(200, -1) && m2.onData(d, 6) && !m2.onData(d, 5) && m2.failure() == HttpError::TooLarge && m2.bytes() == 6);
+		m2.onFinish(false);
+		CHECK(m2.digestHex().empty()); // no digest for a failed transfer
+	}
+	{
+		// The inner sink failing (a write error, ENOSPC) -> Io; a refused start too.
+		auto cap = std::make_unique<CaptureSink>();
+		cap->failAfter = 5;
+		Md5Sink m(std::move(cap), 100);
+		const uint8_t d[8] = {0};
+		CHECK(m.onStart(200, 100) && m.onData(d, 5) && !m.onData(d, 3) && m.failure() == HttpError::Io && m.bytes() == 5);
+		auto cap2 = std::make_unique<CaptureSink>();
+		cap2->refuseStart = true;
+		Md5Sink m2(std::move(cap2), 100);
+		CHECK(!m2.onStart(200, 100) && m2.failure() == HttpError::Io);
+	}
+	{
+		// A short body is not refused by the sink: verify compares bytes() with the catalog's size.
+		Md5Sink m(std::make_unique<CaptureSink>(), 100);
+		const uint8_t d[4] = {1, 2, 3, 4};
+		CHECK(m.onStart(200, -1) && m.onData(d, 4));
+		m.onFinish(true);
+		CHECK(m.bytes() == 4 && m.digestHex() == md5Of(d, 4));
+	}
+	// The real FileSink underneath, into a temp dir: the .tmp becomes the file only on commit(), and nothing is left on failure.
+	{
+		const std::string dir = "/tmp/openshop-md5sink-test";
+		std::filesystem::remove_all(dir);
+		std::filesystem::create_directories(dir);
+		auto fsink = std::make_unique<FileSink>(dir + "/download.zip");
+		FileSink* f = fsink.get();
+		Md5Sink m(std::move(fsink), 11);
+		CHECK(m.onStart(200, 11) && m.onData(reinterpret_cast<const uint8_t*>("hello world"), 11));
+		m.onFinish(true);
+		CHECK(std::filesystem::exists(dir + "/download.zip.tmp") && !std::filesystem::exists(dir + "/download.zip"));
+		CHECK(f->commit() && std::filesystem::exists(dir + "/download.zip") && !std::filesystem::exists(dir + "/download.zip.tmp"));
+		CHECK(m.digestHex() == "5eb63bbbe01eeed093cb22bb8f5acdc3");
+		{
+			Md5Sink m3(std::make_unique<FileSink>(dir + "/other.zip"), 3);
+			CHECK(m3.onStart(200, -1) && !m3.onData(reinterpret_cast<const uint8_t*>("abcd"), 4));
+			m3.onFinish(false);
+		}
+		CHECK(!std::filesystem::exists(dir + "/other.zip") && !std::filesystem::exists(dir + "/other.zip.tmp")); // the tmp is removed
+		std::filesystem::remove_all(dir);
+	}
+}
+
+static std::string lower(std::string s) {
+	for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+	return s;
+}
+static bool cleanWording(const std::string& t) {
+	const std::string l = lower(t);
+	for (const char* w : {"secure", "verif", "tamper", "safe", "md5", "checksum", "hash", "https", "encrypt", "unencrypted", "tls"})
+		if (l.find(w) != std::string::npos) return false;
+	return true;
+}
+
+static void testMessages() {
+	// Every HttpError maps to a non-empty text (None to ""), none with security wording.
+	for (int i = 0; i <= static_cast<int>(HttpError::Redirects); i++) {
+		const HttpError e = static_cast<HttpError>(i);
+		const std::string t = downloadErrorText(e, 503);
+		CHECK(e == HttpError::None ? t.empty() : !t.empty());
+		CHECK(cleanWording(t));
+	}
+	CHECK(downloadErrorText(HttpError::Redirects) == "The shop's server sent an unexpected answer.");
+	CHECK(downloadErrorText(HttpError::TlsRequired) == downloadErrorText(HttpError::Redirects)); // can't occur for http, maps to "unexpected"
+	CHECK(downloadErrorText(HttpError::HttpStatus, 404).find("404") != std::string::npos);
+	CHECK(!downloadErrorText(HttpError::HttpStatus, 0).empty());
+	for (int i = 0; i <= static_cast<int>(InstallError::DiskUnreadable); i++) {
+		const std::string t = installErrorText(static_cast<InstallError>(i), Device::Usb, 5 * 1024 * 1024, 1024);
+		CHECK(!t.empty() && cleanWording(t));
+		CHECK(!installErrorText(static_cast<InstallError>(i)).empty()); // and with no device and no amounts
+	}
+	CHECK(installErrorText(InstallError::Damaged) == "The download was damaged. Please try again.");
+	CHECK(installErrorText(InstallError::NoAppsDevice) == "No SD card or USB drive found.");
+	CHECK(installErrorText(InstallError::NoSpace, Device::Sd, 5 * 1024 * 1024, 1024).find("5 MB is needed, less than 1 MB is free") != std::string::npos);
+	CHECK(std::string(deviceName(Device::Sd)) == "SD card" && std::string(deviceName(Device::Usb)) == "USB drive");
+	// Every refusal reason has a text (None has none) and clean wording; each says why in plain words.
+	for (int i = 0; i <= static_cast<int>(InstallRefusal::NoAppDir); i++) {
+		const InstallRefusal r = static_cast<InstallRefusal>(i);
+		const std::string t = refusalText(r);
+		CHECK(r == InstallRefusal::None ? t.empty() : (!t.empty() && cleanWording(t)));
+	}
+}
+
+static void testInstallDevOption() {
+	DevOptions o;
+	DevOptions::parseFile("install=TinyLoad\nbadmd5=1\n", o);
+	CHECK(o.installSlug == "TinyLoad" && o.testBadMd5);
+	CHECK(o.describe().find("install=TinyLoad") != std::string::npos && o.active().find("install=TinyLoad") != std::string::npos);
+	CHECK(o.active().find("badmd5=1") != std::string::npos);
+	CHECK(DevOptions().active().find("install") == std::string::npos && DevOptions().installSlug.empty() && !DevOptions().testBadMd5);
+	setenv("OPENSHOP_DEV_INSTALL", " Eject_DVD ", 1);
+	setenv("OPENSHOP_TEST_BAD_MD5", "1", 1);
+	const DevOptions e = DevOptions::load("/nonexistent-openshop-dir");
+	CHECK(e.installSlug == "Eject_DVD" && e.testBadMd5);
+	setenv("OPENSHOP_TEST_BAD_MD5", "0", 1);
+	CHECK(!DevOptions::load("/nonexistent-openshop-dir").testBadMd5);
+	unsetenv("OPENSHOP_DEV_INSTALL");
+	unsetenv("OPENSHOP_TEST_BAD_MD5");
+}
+
 int main() {
 	testMd5Vectors();
 	testMd5Chunked();
@@ -2144,5 +2421,9 @@ int main() {
 	testJobQueue();
 	testJobQueueHistoryAndCounts();
 	testDevJobOptions();
+	testPreflight();
+	testMd5Sink();
+	testMessages();
+	testInstallDevOption();
 	return checkReport("install_test");
 }

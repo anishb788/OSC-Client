@@ -16,6 +16,7 @@
 
 #include "core/Log.h"
 #include "net/HttpParse.h"
+#include "net/NetState.h"
 
 // QUIRKS OBSERVED IN DOLPHIN (Increment 7; real hardware is still to be checked, see the epic notes)
 //  - Dolphin's emulated network is a pass-through to the host: 127.0.0.1 on the Wii is the HOST's loopback, so a server
@@ -104,6 +105,7 @@ HttpError initFailed(const char* why, s32 code, bool definite) {
 	g_init = InitState::Failed;
 	g_initFailedMs = nowMs();
 	g_failedDefinite = definite;
+	net::setNetState(net::NetState::Down, SDL_GetTicks()); // pre-flight (M3 Increment 8); Down expires by itself (NetState.h)
 	return HttpError::NoNetwork;
 }
 
@@ -148,6 +150,7 @@ HttpError ensureInit(const std::atomic<bool>* abort, const std::atomic<bool>* ca
 		s32 st = net_get_status();
 		if (st == 0) {
 			g_init = InitState::Ready;
+			setNetState(NetState::Up, SDL_GetTicks());
 			LOG("net init: ready after %llu ms", static_cast<unsigned long long>(nowMs() - g_initStartMs));
 			return HttpError::None;
 		}

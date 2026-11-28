@@ -14,6 +14,7 @@
 #include "gfx/IconCache.h"
 #include "gfx/Text.h"
 #include "install/AppsDevice.h"
+#include "install/Installer.h"
 #include "install/Jobs.h"
 #include "net/NetSelfTest.h"
 #include "net/Worker.h"
@@ -137,6 +138,11 @@ public:
 	// The job system (Increment 7). Owned here, so it outlives every screen and every Refresh (resetTo and refreshCatalog() never
 	// touch it). Main thread only; screens read jobs().snapshot() and never hold anything from it across frames.
 	install::Jobs& jobs() { return jobs_; }
+	// Queues an Install job for `app` on the apps device (M3 Increment 8; the UI's Download button arrives in Increment 9). Copies the
+	// entry into a JobSpec, runs the queue-time pre-flight (the job runs it again when it starts) and adds the job. False with a
+	// UI-ready `why` when it was refused (can't be installed, no SD card or USB drive, not enough space, network known down, job
+	// system not running). `devBadMd5` is the OPENSHOP_TEST_BAD_MD5 hook. Main thread only.
+	bool queueInstall(const AppEntry& app, std::string* why = nullptr, bool devBadMd5 = false);
 	void quit() { quitRequested = true; }
 	// A dialog opened while the LoadingScreen is on top (App's HOME menu) must never capture `AppEntry` pointers or
 	// references: the catalog may be replaced underneath it, and the handover to Home waits for the dialog.
@@ -170,6 +176,10 @@ private:
 	// Declared before worker_: shutdown() stops it explicitly and first; the install worker does disk work only.
 	install::Jobs jobs_;
 	net::Worker worker_{net::defaultTransportFactory()};
+	// The Install runner (Increment 8). Only holds shared state and the worker's address; the runner is registered with jobs_.
+	std::unique_ptr<install::Installer> installer_;
+	bool devInstallDone_ = false; // the install=<slug> dev trigger fires once per launch
+	void devInstallTick();
 	// Declared after the worker: its jobs only hold shared state, but it is destroyed (textures freed) first anyway.
 	std::unique_ptr<IconCache> icons_;
 	bool iconsPruned_ = false; // the startup prune of icons of apps that left the catalog was started

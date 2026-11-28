@@ -11,6 +11,7 @@
 #include "catalog/InstallGuard.h"
 #include "catalog/RefreshPolicy.h"
 #include "core/Log.h"
+#include "core/NameRules.h"
 #include "core/Version.h"
 #include "gfx/Theme.h"
 #include "install/Recovery.h"
@@ -99,10 +100,15 @@ bool App::init(int argc, char** argv) {
 		install::Jobs::Config jc;
 		for (const auto& r : platform::storageRoots()) jc.removeRoots.push_back(r.root);
 		jc.measureStack = opts.perf;
-		jc.logProgress = opts.devJobs > 0 || opts.perf;
+		jc.logProgress = opts.devJobs > 0 || opts.perf || !opts.installSlug.empty();
 		if (!jobs_.start(jc)) {
 			LOG("Jobs: the install worker could not be started; installs will fail");
 		} else {
+			install::Installer::Config ic;
+			ic.worker = &worker_;
+			ic.removeRoots = jc.removeRoots;
+			installer_ = std::make_unique<install::Installer>(std::move(ic));
+			jobs_.setRunner(install::JobKind::Install, installer_->runner()); // download + verify; extraction and commit are Increment 8a
 			for (size_t i = 0; i < mounted.size(); i++) {
 				const install::RecoveryOutcome o = recovered[i].outcome;
 				if (o == install::RecoveryOutcome::LeftAlone || o == install::RecoveryOutcome::Failed) {
@@ -244,6 +250,41 @@ bool App::installCatalog(Catalog&& c, uint32_t token, bool fetchedFromNetwork) {
 	loads.accepted(SDL_GetTicks(), fetchedFromNetwork);
 	LOG("installCatalog accepted, generation %u: %d apps%s", loads.generation(), (int)catalog_.apps.size(),
 	    fetchedFromNetwork ? "" : " (not a network fetch)");
+	devInstallTick();
+	return true;
+}
+
+// Dev trigger (install=<slug> in devstart, OPENSHOP_DEV_INSTALL on PC): once, when the first catalog is in, queue an Install job
+// for that app the way the UI will. Works the same in Dolphin (devstart) and on the PC.
+void App::devInstallTick() {
+	if (devInstallDone_ || opts.installSlug.empty()) return;
+	devInstallDone_ = true;
+	const std::string& slug = opts.installSlug;
+	if (!isValidSlug(slug)) {
+		LOG("Dev install: '%s' is not a valid app slug, ignored", slug.c_str());
+		return;
+	}
+	const AppEntry* app = catalog_.find(slug);
+	if (!app) {
+		LOG("Dev install: no app '%s' in the catalog (%d apps), nothing queued", slug.c_str(), (int)catalog_.apps.size());
+		return;
+	}
+	LOG("Dev install: queueing %s%s", slug.c_str(), opts.testBadMd5 ? " with a wrong expected MD5 (badmd5=1)" : "");
+	std::string why;
+	if (!queueInstall(*app, &why, opts.testBadMd5)) LOG("Dev install: %s was refused: %s", slug.c_str(), why.c_str());
+}
+
+bool App::queueInstall(const AppEntry& app, std::string* why, bool devBadMd5) {
+	auto refuse = [&](const std::string& msg) {
+		LOG("install: %s not queued: %s", app.slug.c_str(), msg.c_str());
+		if (why) *why = msg;
+		return false;
+	};
+	if (!jobs_.running()) return refuse(install::installErrorText(install::InstallError::Unavailable));
+	const install::JobSpec spec = install::makeInstallSpec(app, appsRoot(), install::deviceId(appsDevice()), devBadMd5);
+	const install::PreflightResult pf = install::queueTimeCheck(spec, appsDevice(), SDL_GetTicks());
+	if (!pf.ok()) return refuse(pf.message);
+	if (!jobs_.add(install::JobKind::Install, spec)) return refuse(install::installErrorText(install::InstallError::Unavailable));
 	return true;
 }
 

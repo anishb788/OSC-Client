@@ -77,7 +77,9 @@
  * link-time optimizations.  For the time being, keeping these MD5 routines in
  * their own translation unit avoids the problem.
  */
-#if defined(__i386__) || defined(__x86_64__) || defined(__vax__)
+/* OpenShop: OPENSHOP_MD5_PORTABLE=1 (Makefile.pc, always) turns the unaligned-read shortcut off, so the PC tests run the same
+ * byte-wise code as the big-endian Wii and UBSan does not flag the unaligned word reads of arbitrary HTTP slices. */
+#if (defined(__i386__) || defined(__x86_64__) || defined(__vax__)) && !defined(OPENSHOP_MD5_PORTABLE)
 #define SET(n) \
 	(*(MD5_u32plus *)&ptr[(n) * 4])
 #define GET(n) \

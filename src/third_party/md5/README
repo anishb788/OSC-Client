@@ -7,10 +7,11 @@ Licence:  public domain (fallback: permissive, "redistribution and use ... are p
 Used by:  the archive download (M3), to detect a truncated or corrupted download.
 
 Upstream: md5/md5.c and md5/md5.h from https://github.com/openwall/popa3d (the same file the homepage links).
-md5.c is byte-identical to upstream. md5.h only gained extern "C" guards for C++ (marked "OpenShop").
-On x86 upstream reads words directly; on the big-endian Wii it uses the portable byte-wise SET(). The MD5 itself is
-checked by tests/install_test.cpp (RFC 1321 vectors, and chunked versus one-shot hashing).
-The PC tests run the x86 word-read branch; the byte-wise branch the Wii uses was checked once by hand (the same
-tests with that #if forced off, under ASan/UBSan) and gets real coverage from the first Wii download (M3 Increment 8).
+md5.c equals upstream except for one marked "OpenShop" line: the x86 unaligned-read shortcut in SET() is skipped when
+OPENSHOP_MD5_PORTABLE is defined. md5.h only gained extern "C" guards for C++ (marked "OpenShop").
+On x86 upstream reads words directly; on the big-endian Wii it uses the portable byte-wise SET(). Makefile.pc always defines
+OPENSHOP_MD5_PORTABLE=1, so the PC app and every host test run the SAME byte-wise code as the Wii (and UBSan does not flag the
+unaligned word reads that arbitrary HTTP slices would cause; Increment 8's installer_test found that). The MD5 itself is
+checked by tests/install_test.cpp (RFC 1321 vectors, chunked versus one-shot hashing, 1..n-byte slices) and installer_test.cpp.
 
 MD5 here detects corruption only. Archives come over plain http, so it says nothing about tampering.

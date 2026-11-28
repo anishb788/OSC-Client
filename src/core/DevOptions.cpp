@@ -90,6 +90,8 @@ void DevOptions::parseFile(const std::string& text, DevOptions& o) {
 		else if (key == "devjobms") o.devJobMs = parseNonNegative(val);
 		else if (key == "devjobfail") o.devJobFail = truthy(val);
 		else if (key == "devjobcommit") o.devJobCommit = truthy(val);
+		else if (key == "install") o.installSlug = val;
+		else if (key == "badmd5") o.testBadMd5 = truthy(val);
 	}
 }
 
@@ -125,6 +127,8 @@ DevOptions DevOptions::load(const std::string& dataDir) {
 	if (const char* v = std::getenv("OPENSHOP_DEVJOBMS"); v && *v) o.devJobMs = parseNonNegative(v);
 	if (const char* v = std::getenv("OPENSHOP_DEVJOBFAIL"); v && *v) o.devJobFail = truthy(v);
 	if (const char* v = std::getenv("OPENSHOP_DEVJOBCOMMIT"); v && *v) o.devJobCommit = truthy(v);
+	if (const char* v = std::getenv("OPENSHOP_DEV_INSTALL"); v && *v) o.installSlug = trim(v);
+	if (const char* v = std::getenv("OPENSHOP_TEST_BAD_MD5"); v && *v) o.testBadMd5 = truthy(v);
 	return o;
 }
 
@@ -147,6 +151,7 @@ std::string DevOptions::describe() const {
 	       (devJobs > 0 ? " devjobs=" + std::to_string(devJobs) + (devJobMs >= 0 ? " devjobms=" + std::to_string(devJobMs) : std::string()) +
 	                          (devJobFail ? " devjobfail=1" : "") + (devJobCommit ? " devjobcommit=1" : "")
 	                    : std::string()) +
+	       (installSlug.empty() ? std::string() : " install=" + installSlug + (testBadMd5 ? " badmd5=1" : "")) +
 	       (nettest.empty() && nettestBg.empty() ? std::string() : " nettest=" + nettest + " nettestbg=" + nettestBg + " nettestquit=" + (nettestQuit ? "1" : "0"));
 }
 
@@ -179,6 +184,8 @@ std::string DevOptions::active() const {
 	if (devJobs > 0 && devJobMs >= 0) add("devjobms=" + std::to_string(devJobMs));
 	if (devJobs > 0 && devJobFail) add("devjobfail=1");
 	if (devJobs > 0 && devJobCommit) add("devjobcommit=1");
+	if (!installSlug.empty()) add("install=" + installSlug);
+	if (!installSlug.empty() && testBadMd5) add("badmd5=1");
 	if (!nettest.empty() || !nettestBg.empty() || nettestQuit) add("nettest=" + nettest + " nettestbg=" + nettestBg);
 	return out;
 }

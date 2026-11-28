@@ -31,14 +31,15 @@ endif
 
 CXXFLAGS := -std=gnu++20 -g -O1 $(WARN) $(SANFLAGS) $(DEFS) -Isrc -MMD -MP $(shell pkg-config --cflags $(PKGS))
 CC       ?= gcc
-CFLAGS_C := -std=gnu11 -g -O1 $(WARN) $(SANFLAGS) -Isrc -MMD -MP
+# OPENSHOP_MD5_PORTABLE: the PC runs the Wii's byte-wise MD5 word reads (see src/third_party/md5/README).
+CFLAGS_C := -std=gnu11 -g -O1 $(WARN) $(SANFLAGS) -DOPENSHOP_MD5_PORTABLE=1 -Isrc -MMD -MP
 ASFLAGS  := -Wa,-I.
 # libzip: the normal dynamic link (not --static, which on Debian drags in lzma/zstd/ssl). The Wii build is the one that
 # must stay at -lzip -lbz2 -lz; see Makefile.
 LDLIBS   := $(shell pkg-config --libs $(PKGS)) -lz -lm
 
 # The flags this build dir was made with (same idea as build/.flags in Makefile). Rewritten only when they change, so
-# WERROR=1 on a built tree recompiles, and a plain build afterwards recompiles again.
+# WERROR=1 on a built tree recompiles, and a plain build afterwards recompiles again. Covers the test flags (TESTCXX) too.
 STAMP := $(BUILD)/.flags
 .PHONY: FORCE
 .DEFAULT_GOAL := $(TARGET)
@@ -51,7 +52,7 @@ STAMPDEP := FORCE
 endif
 $(STAMP): $(STAMPDEP)
 	@mkdir -p $(BUILD)
-	@printf '%s\n' '$(CXXFLAGS) $(CFLAGS_C)' | cmp -s - $@ || printf '%s\n' '$(CXXFLAGS) $(CFLAGS_C)' > $@
+	@printf '%s\n' '$(CXXFLAGS) $(CFLAGS_C) $(TESTCXX)' | cmp -s - $@ || printf '%s\n' '$(CXXFLAGS) $(CFLAGS_C) $(TESTCXX)' > $@
 
 SRCS := $(shell find src -name '*.cpp')
 # Vendored C sources (src/third_party/md5): compiled with the same warning flags, as C.
@@ -78,7 +79,8 @@ $(BUILD)/src/assets.o: src/assets.S $(wildcard assets/fonts/*.ttf)
 # rebuilds exactly the tests that include it (no hand-listed header dependencies to go stale). Test objects are kept
 # apart from the app's: they are built without DEFS, so a DEBUGTOOLS build dir never gets the debug log hooks in tests.
 # Fixtures under tests/fixtures/ are read at run time, so they are not build dependencies.
-TESTCXX := -std=gnu++20 -g -O1 $(WARN) $(SANFLAGS) -Isrc -Itests -pthread -MMD -MP $(shell pkg-config --cflags sdl2 SDL2_image jansson libzip)
+# -DOPENSHOP_TESTS=1: the test-only hooks (install::Installer::Config) exist in test objects only, never in the app.
+TESTCXX := -std=gnu++20 -g -O1 $(WARN) $(SANFLAGS) -DOPENSHOP_TESTS=1 -Isrc -Itests -pthread -MMD -MP $(shell pkg-config --cflags sdl2 SDL2_image jansson libzip)
 SDLLIBS := $(shell pkg-config --libs sdl2)
 JANSSONLIBS := $(shell pkg-config --libs jansson)
 
@@ -99,7 +101,7 @@ $(BUILD)/tobj/%.o: %.c $(STAMP)
 
 # name -> sources (tests/<name>.cpp is added automatically) and extra link libraries.
 TESTS := catalog_test core_test topbar_test layout_test http_parse_test http_transfer_test http_posix_test worker_test \
-         nettest_script_test oscapi_test netloader_test cache_test wrap_test httpget gfx_test icon_test install_test fileutil_test zip_test commit_test jobs_test
+         nettest_script_test oscapi_test netloader_test cache_test wrap_test httpget gfx_test icon_test install_test fileutil_test zip_test commit_test jobs_test installer_test
 SRCS_catalog_test        := src/catalog/Catalog.cpp src/core/NameRules.cpp src/install/Rules.cpp src/catalog/ArchiveUrl.cpp src/catalog/MockCatalog.cpp
 SRCS_core_test           := src/core/DevOptions.cpp
 SRCS_topbar_test         :=
@@ -131,7 +133,7 @@ SRCS_icon_test           := $(ICONSRCS)
 LIBS_icon_test           := $(SDLLIBS) $(shell pkg-config --libs SDL2_image) -lz
 
 # M3: the pure install modules. MD5 is the vendored C file; libzip is linked from Increment 1 (zip_libzip_version).
-SRCS_install_test        := src/third_party/md5/md5.c src/install/AppsDevice.cpp src/install/Version.cpp src/install/MetaXml.cpp src/core/FileUtil.cpp src/core/DevOptions.cpp src/catalog/OscApi.cpp src/catalog/Catalog.cpp src/core/NameRules.cpp src/install/Rules.cpp src/catalog/ArchiveUrl.cpp src/install/Manifest.cpp src/install/Journal.cpp src/install/RecordIo.cpp src/install/JobQueue.cpp
+SRCS_install_test        := src/third_party/md5/md5.c src/install/AppsDevice.cpp src/install/Version.cpp src/install/MetaXml.cpp src/core/FileUtil.cpp src/core/DevOptions.cpp src/catalog/OscApi.cpp src/catalog/Catalog.cpp src/core/NameRules.cpp src/install/Rules.cpp src/catalog/ArchiveUrl.cpp src/install/Manifest.cpp src/install/Journal.cpp src/install/RecordIo.cpp src/install/JobQueue.cpp src/install/Messages.cpp src/install/Preflight.cpp src/install/Md5Sink.cpp src/net/Sinks.cpp
 LIBS_install_test        := $(shell pkg-config --libs libzip) $(JANSSONLIBS)
 SRCS_fileutil_test       := src/core/FileUtil.cpp
 # M3 Increment 4: ZipExtract against libzip (fixtures are built at run time with libzip's writer).
@@ -144,6 +146,10 @@ LIBS_commit_test         := $(shell pkg-config --libs libzip) $(JANSSONLIBS)
 # M3 Increment 7: the install worker, Jobs and the Cleanup job on real threads (SDL threads, no SDL_Init), plus the AppsDevice busy guard.
 SRCS_jobs_test           := src/install/Jobs.cpp src/install/InstallWorker.cpp src/install/JobQueue.cpp src/install/AppsDevice.cpp src/install/Commit.cpp src/install/Recovery.cpp src/install/ZipExtract.cpp src/install/Manifest.cpp src/install/Journal.cpp src/install/RecordIo.cpp src/install/Rules.cpp src/core/NameRules.cpp src/core/FileUtil.cpp
 LIBS_jobs_test           := $(SDLLIBS) $(shell pkg-config --libs libzip) $(JANSSONLIBS)
+
+# M3 Increment 8: the Install runner end to end on a real net worker against loopback servers (no network needed), plus the Jobs it runs in.
+SRCS_installer_test      := src/install/Installer.cpp src/install/Preflight.cpp src/install/Messages.cpp src/install/Md5Sink.cpp src/third_party/md5/md5.c src/install/Jobs.cpp src/install/InstallWorker.cpp src/install/JobQueue.cpp src/install/AppsDevice.cpp src/install/Commit.cpp src/install/Recovery.cpp src/install/ZipExtract.cpp src/install/Manifest.cpp src/install/Journal.cpp src/install/RecordIo.cpp src/install/Rules.cpp src/core/NameRules.cpp src/core/FileUtil.cpp src/catalog/Catalog.cpp src/catalog/ArchiveUrl.cpp src/net/Worker.cpp $(NETSRCS)
+LIBS_installer_test      := $(SDLLIBS) $(shell pkg-config --libs libzip) $(JANSSONLIBS)
 
 define TESTRULE
 $$(BUILD)/tests/$(1): $$(call tobj,tests/$(1).cpp $$(SRCS_$(1)))

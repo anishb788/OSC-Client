@@ -39,12 +39,14 @@
 #     --devjobms <ms>                             how long each dev job takes (default 3000)
 #     --devjobfail                                the last dev job fails
 #     --devjobcommit                              the second half of each dev job counts as the commit phase (cannot be cancelled; quitting waits for it)
+#     --install <slug>                            dev-only (M3 Increment 8): once the first catalog is in, queue an Install job for that app exactly as the Download button will (target = the "Show apps on" device; add --appsdevice usb for USB). Downloads <slug>'s archive over plain http into staging, checks its size and MD5, logs "verified, extraction pending" and removes its staging (unpacking arrives in 8a). Works in Dolphin (devstart) and on PC. Good small test apps: TinyLoad (22 KB), Eject_DVD (77 KB), SensorMii (72 KB)
+#     --badmd5                                    with --install: the job expects a wrong MD5, so it must fail with "The download was damaged. Please try again." and leave nothing behind
 #     --nettest <script>                          dev-only network self-test: GET URLs through the worker and log the results
 #     --nettestbg <url>                           ... plus a Background download alongside (shorthand for bg:<url> first)
 #     --nettestquit                               quit by itself when the script ends (a bg job still running tests stop())
 #                                                 Script syntax: src/net/NetSelfTest.h. The UI is untouched. Off by default.
 #   On Wii they are written to <app dir>/devstart as key=value lines (env vars don't reach
-#   Dolphin); on PC they are exported as OPENSHOP_START / _MOCK / _OFFLINE / _REFRESH / _FAIL / _TOPBAR / _MOCKDELAY / _RATELIMIT / _CACHETTL / _API / _ICONS / _AUTOREFRESH / _PERF / _HEAPPROBE / _STACKPROBE / _COMMITPROBE / _COMMITPROBE_FILES / _COMMITPROBE_STACK / _CLAIMPROBE / _NETTEST / _NETTESTBG / _NETTESTQUIT / _APPS_DEVICE / _APPS_DEVICE_SWAP.
+#   Dolphin); on PC they are exported as OPENSHOP_START / _MOCK / _OFFLINE / _REFRESH / _FAIL / _TOPBAR / _MOCKDELAY / _RATELIMIT / _CACHETTL / _API / _ICONS / _AUTOREFRESH / _PERF / _HEAPPROBE / _STACKPROBE / _COMMITPROBE / _COMMITPROBE_FILES / _COMMITPROBE_STACK / _CLAIMPROBE / _NETTEST / _NETTESTBG / _NETTESTQUIT / _APPS_DEVICE / _APPS_DEVICE_SWAP / _DEVJOBS / _DEV_INSTALL / _TEST_BAD_MD5.
 #   Dolphin's virtual SD card is synced with ./sdcard (put bgm.mp3 in sdcard/apps/OpenShop/).
 #   ./sdcard is a symlink to .dolphin/sdcard; .dolphin/ is the only repo dir Dolphin may write to.
 #   ./dev package             clean release build (never DEBUGTOOLS) into dist/OpenShop.zip for the Homebrew Channel (SD:/apps/OpenShop)
@@ -269,6 +271,8 @@ devstart_text() {
 	[[ -n "$OPT_DEVJOBMS" ]] && echo "devjobms=$OPT_DEVJOBMS"
 	(( OPT_DEVJOBFAIL )) && echo "devjobfail=1"
 	(( OPT_DEVJOBCOMMIT )) && echo "devjobcommit=1"
+	[[ -n "$OPT_INSTALL" ]] && echo "install=$OPT_INSTALL"
+	(( OPT_BADMD5 )) && echo "badmd5=1"
 	return 0
 }
 
@@ -338,7 +342,7 @@ launch_pc() {
 		OPENSHOP_MOCKDELAY="$OPT_MOCKDELAY" OPENSHOP_RATELIMIT="$OPT_RATELIMIT" OPENSHOP_CACHETTL="$OPT_CACHETTL" OPENSHOP_API="$OPT_API" OPENSHOP_ICONS="$OPT_ICONS" OPENSHOP_AUTOREFRESH="$OPT_AUTOREFRESH" OPENSHOP_PERF="$OPT_PERF" OPENSHOP_HEAPPROBE="$OPT_HEAPPROBE" OPENSHOP_STACKPROBE="$OPT_STACKPROBE" \
 		OPENSHOP_COMMITPROBE="$OPT_COMMITPROBE" OPENSHOP_COMMITPROBE_FILES="$OPT_COMMITPROBE_FILES" OPENSHOP_COMMITPROBE_STACK="$OPT_COMMITPROBE_STACK" OPENSHOP_CLAIMPROBE="$OPT_CLAIMPROBE" \
 		OPENSHOP_NETTEST="$OPT_NETTEST" OPENSHOP_NETTESTBG="$OPT_NETTESTBG" OPENSHOP_NETTESTQUIT="$OPT_NETTESTQUIT" \
-		OPENSHOP_APPS_DEVICE="$OPT_APPSDEVICE" OPENSHOP_APPS_DEVICE_SWAP="$OPT_APPSDEVICESWAP" OPENSHOP_DEVJOBS="$OPT_DEVJOBS" OPENSHOP_DEVJOBMS="$OPT_DEVJOBMS" OPENSHOP_DEVJOBFAIL="$OPT_DEVJOBFAIL" OPENSHOP_DEVJOBCOMMIT="$OPT_DEVJOBCOMMIT" ./build-pc/openshop &
+		OPENSHOP_APPS_DEVICE="$OPT_APPSDEVICE" OPENSHOP_APPS_DEVICE_SWAP="$OPT_APPSDEVICESWAP" OPENSHOP_DEVJOBS="$OPT_DEVJOBS" OPENSHOP_DEVJOBMS="$OPT_DEVJOBMS" OPENSHOP_DEVJOBFAIL="$OPT_DEVJOBFAIL" OPENSHOP_DEVJOBCOMMIT="$OPT_DEVJOBCOMMIT" OPENSHOP_DEV_INSTALL="$OPT_INSTALL" OPENSHOP_TEST_BAD_MD5="$OPT_BADMD5" ./build-pc/openshop &
 	echo $! > build-pc/.pid
 }
 
@@ -407,7 +411,7 @@ headers() {
 usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; }
 
 cmd="${1:-}"; shift || true
-START_SCREEN=""; OPT_MOCK=0; OPT_OFFLINE=0; OPT_REFRESH=0; OPT_FAIL=""; OPT_TOPBAR=""; OPT_MOCKDELAY=""; OPT_RATELIMIT=""; OPT_CACHETTL=""; OPT_API=""; OPT_ICONS=""; OPT_AUTOREFRESH=""; OPT_PERF=0; OPT_HEAPPROBE=0; OPT_STACKPROBE=0; OPT_COMMITPROBE=""; OPT_COMMITPROBE_FILES=""; OPT_COMMITPROBE_STACK=""; OPT_CLAIMPROBE=0; OPT_NETTEST=""; OPT_NETTESTBG=""; OPT_NETTESTQUIT=0; OPT_APPSDEVICE=""; OPT_APPSDEVICESWAP=0; OPT_DEVJOBS=""; OPT_DEVJOBMS=""; OPT_DEVJOBFAIL=0; OPT_DEVJOBCOMMIT=0
+START_SCREEN=""; OPT_MOCK=0; OPT_OFFLINE=0; OPT_REFRESH=0; OPT_FAIL=""; OPT_TOPBAR=""; OPT_MOCKDELAY=""; OPT_RATELIMIT=""; OPT_CACHETTL=""; OPT_API=""; OPT_ICONS=""; OPT_AUTOREFRESH=""; OPT_PERF=0; OPT_HEAPPROBE=0; OPT_STACKPROBE=0; OPT_COMMITPROBE=""; OPT_COMMITPROBE_FILES=""; OPT_COMMITPROBE_STACK=""; OPT_CLAIMPROBE=0; OPT_NETTEST=""; OPT_NETTESTBG=""; OPT_NETTESTQUIT=0; OPT_APPSDEVICE=""; OPT_APPSDEVICESWAP=0; OPT_DEVJOBS=""; OPT_DEVJOBMS=""; OPT_DEVJOBFAIL=0; OPT_DEVJOBCOMMIT=0; OPT_INSTALL=""; OPT_BADMD5=0
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 		--screen)
@@ -434,6 +438,10 @@ while [[ $# -gt 0 ]]; do
 		--appsdeviceswap) OPT_APPSDEVICESWAP=1; shift ;;
 		--devjobfail) OPT_DEVJOBFAIL=1; shift ;;
 		--devjobcommit) OPT_DEVJOBCOMMIT=1; shift ;;
+		--badmd5) OPT_BADMD5=1; shift ;;
+		--install|--install=*)
+			if [[ "$1" == --install=* ]]; then OPT_INSTALL="${1#--install=}"; shift; else OPT_INSTALL="${2:-}"; shift $(( $# > 1 ? 2 : 1 )); fi
+			[[ "$OPT_INSTALL" =~ ^[A-Za-z0-9._-]{1,64}$ && "$OPT_INSTALL" != .* && "$OPT_INSTALL" != *. ]] || { err "--install: needs an app slug (letters, digits, . _ -), e.g. --install TinyLoad"; exit 1; } ;;
 		--devjobs|--devjobms)
 			[[ "${2:-}" =~ ^[0-9]{1,6}$ ]] || { err "$1: needs a number"; exit 1; }
 			if [[ "$1" == --devjobs ]]; then
